@@ -1,0 +1,5 @@
+.vscode/
+_pycache/
+camtrapnz/tests/data/
+.log
+history/

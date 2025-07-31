@@ -1,0 +1,28 @@
+[project]
+name = "camtrapnz"
+version = "0.1.0"
+description = "A python project for CamTrapNZ results' data analysis"
+authors = [
+    {name = "Libby Li"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas (>=2.3.1,<3.0.0)",
+    "openpyxl (>=3.1.5,<4.0.0)",
+    "matplotlib (>=3.10.3,<4.0.0)",
+    "scipy (>=1.16.0,<2.0.0)",
+    "pytest (>=8.4.1,<9.0.0)",
+    "numpy (>=2.3.1,<3.0.0)",
+    "uvicorn (>=0.35.0,<0.36.0)",
+    "fastapi (>=0.116.1,<0.117.0)",
+    "pyqt5 (>=5.15.11,<6.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+camtrapnz = "camtrapnz.src.gui:launch_gui"
