@@ -3,3 +3,4 @@ _pycache/
 camtrapnz/tests/data/
 .log
 history/
+.DS_Store
