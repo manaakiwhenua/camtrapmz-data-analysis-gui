@@ -1,5 +1,5 @@
 [project]
-name = "camtrapnz"
+name = "app"
 version = "0.1.0"
 description = "A python project for CamTrapNZ results' data analysis"
 authors = [
@@ -25,4 +25,4 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-camtrapnz = "camtrapnz.src.gui:launch_gui"
+camtrapnz = "app.src.gui:launch_gui"
