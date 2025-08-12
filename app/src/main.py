@@ -8,7 +8,16 @@ from .analysis import (
 )
 from .plotter import plot_trap_rates
 
-def run_pipeline(file_path, selected_species=None, bin_days=7):
+def run_pipeline(file_path: str, selected_species=None, bin_days=7) -> tuple:
+    """Run the full analysis pipeline on the provided data file.
+    Args:
+        file_path (str): path to the input Excel file
+        selected_species (list): list of species to filter results, if None all species are included
+        bin_days (int): number of days for binning detection histories
+    Returns:
+        results (dict): dictionary containing DataFrames of analysis results
+        messages (list): list of status messages from the pipeline
+    """
     messages = []
     try:
         raw_df = pd.read_excel(file_path, sheet_name="Sheet1", engine="openpyxl")
@@ -44,7 +53,13 @@ def run_pipeline(file_path, selected_species=None, bin_days=7):
 
     return results, messages
 
-def export_results(results, output_prefix="camera_trap"):
+def export_results(results, output_prefix="camera_trap") -> list:
+    """Export analysis results to Excel and generate plots.
+    Args:
+        results (dict): dictionary containing analysis results
+        output_prefix (str): prefix for output files
+    Returns:
+        messages (list): list of status messages from the export process"""
     try:
         with pd.ExcelWriter(f"{output_prefix}_output.xlsx") as writer:
             results["summary"].to_excel(writer, sheet_name="CameraDateSummary", index=False)

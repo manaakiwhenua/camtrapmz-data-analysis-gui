@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-def plot_trap_rates(df, filename, dpi=300, figsize=(10, 6), show=False):
+def plot_trap_rates(df, filename, dpi=300, figsize=(10, 6), show=False) -> None:
     """
     Plots and optionally saves a camera trap rate bar chart per species.
     

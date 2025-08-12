@@ -5,8 +5,14 @@ import re
 
 ### 🔧 Utilities
 
-def parse_exif_date(date_str):
-    """Parse EXIF date string into a datetime object."""
+def parse_exif_date(date_str) -> datetime:
+    """Parse EXIF date string into a datetime object.
+    Args:
+        date_str (str): date string in format "YYYY:MM:DD HH:MM:SS"
+    
+    Returns:
+        datetime: parsed datetime object or None if parsing fails
+    """
     try:
         date_part, time_part = date_str.strip().split(" ")
         y, m, d = map(int, date_part.split(":"))
@@ -15,13 +21,24 @@ def parse_exif_date(date_str):
     except:
         return None
 
-def extract_camera(label):
-    """Extract camera identifier from label."""
+def extract_camera(label) -> str:
+    """Extract camera identifier from label.
+    Args:
+        label (str): camera label string
+    Returns:
+        str: extracted camera identifier or empty string if not found
+    """
     match = re.search(r"(Cam\d{2})", str(label))
     return match.group(1) if match else ""
 
-def get_bins(start_date, end_date, step=7):
-    """Generate date bins from start to end date with a specified step in days."""
+def get_bins(start_date, end_date, step=7) -> list:
+    """Generate date bins from start to end date with a specified step in days.
+    Args:
+        start_date (datetime): start date for bins
+        end_date (datetime): end date for bins
+        step (int): number of days for each bin
+    Returns:
+        list: list of datetime objects representing bin edges"""
     bins = []
     d = start_date
     while d <= end_date:
@@ -29,15 +46,31 @@ def get_bins(start_date, end_date, step=7):
         d += timedelta(days=step)
     return bins
 
-def has_detection(df, cam, sp, start, end):
+def has_detection(df, cam, sp, start, end) -> bool:
+    """Check if there are detections for a specific camera and species within a date range.
+    Args:
+        df (DataFrame): DataFrame containing detection data
+        cam (str): camera identifier
+        sp (str): species name
+        start (datetime): start of the date range
+        end (datetime): end of the date range
+    Returns:
+        bool: True if there are detections, False otherwise
+    """
     subset = df[df["Label"].str.contains(cam, na=False) & (df["Burst_class"] == sp)]
     parsed_dates = subset["Date_taken"].apply(lambda x: parse_exif_date(str(x)))
     return any((parsed_dates >= start) & (parsed_dates < end))
 
 ### 1. Summarise Camera Dates
-def summarise_camera_dates(df):
-    """Summarise the first and last photo dates for each camera."""
+def summarise_camera_dates(df) -> pd.DataFrame:
+    """Summarise the first and last photo dates for each camera.
+    Args:
+        df (DataFrame): DataFrame containing camera data with columns ["Label", "Date_taken"]
+    Returns:
+        DataFrame: summary DataFrame with columns ["Camera", "FirstPhoto", "LastPhoto", "NumberOfDays"]
+    """
     summary = {}
+    # Iterate through each row to build summary
 
     for _, row in df.iterrows():
         label = row.get("Label")
@@ -65,8 +98,13 @@ def summarise_camera_dates(df):
 
 ### 2. Identify Independent Detections
 
-def identify_independent_detections(df):
-    """Identify independent detections based on a 30-minute threshold."""
+def identify_independent_detections(df) -> pd.DataFrame:
+    """Identify independent detections based on a 30-minute threshold.
+    Args:
+        df (DataFrame): DataFrame containing detection data with columns ["Label", "Burst_class", "Date_taken"]
+    Returns:
+        DataFrame: DataFrame with independent detections, dropping duplicates within 30 minutes
+    """
     df["ParsedDate"] = df["Date_taken"].apply(lambda x: parse_exif_date(str(x)))
     df = df.dropna(subset=["ParsedDate"])
     seen, output = {}, []
@@ -82,8 +120,14 @@ def identify_independent_detections(df):
 
 ### 3. Calculate Trap Rates with Confidence Intervals
 
-def calculate_trap_rates(summary_df, detections_df):
-    """Calculate trap rates with confidence intervals."""
+def calculate_trap_rates(summary_df, detections_df) -> pd.DataFrame:
+    """Calculate trap rates with confidence intervals.
+    Args:
+        summary_df (DataFrame): DataFrame with camera summary data
+        detections_df (DataFrame): DataFrame with independent detections
+    Returns:
+        DataFrame: DataFrame with trap rates per species, including confidence intervals
+    """
     total_days = summary_df["NumberOfDays"].sum()
     detections_df["Count"] = pd.to_numeric(detections_df["Count"], errors="coerce").fillna(1)
     counts = detections_df.groupby("Burst_class")["Count"].sum()
@@ -103,8 +147,15 @@ def calculate_trap_rates(summary_df, detections_df):
 
 ### 🧮 4. Create Detection Histories
 
-def create_detection_histories(file_path, species_list, bin_size):
-    """Create detection histories for specified species with a given bin size."""
+def create_detection_histories(file_path: str, species_list: list, bin_size: int) -> dict:
+    """Create detection histories for specified species with a given bin size.
+    Args:
+        file_path (str): path to the input Excel file
+        species_list (list): list of species to include in the histories
+        bin_size (int): number of days for binning detection histories
+    Returns:
+        dict: dictionary of DataFrames with detection histories for each species
+    """
     raw = pd.read_excel(file_path, sheet_name="Sheet1")
     summary = pd.read_excel(file_path, sheet_name="CameraDateSummary")
 
@@ -140,7 +191,11 @@ def create_detection_histories(file_path, species_list, bin_size):
 
     return all_histories
 
-def write_detection_histories(histories_dict, writer):
-    """Write detection histories to an Excel writer."""
+def write_detection_histories(histories_dict: dict, writer) -> None:
+    """Write detection histories to an Excel writer.
+    Args:
+        histories_dict (dict): dictionary of DataFrames with detection histories
+        writer (ExcelWriter): pandas ExcelWriter object to write to
+    """
     for species, df in histories_dict.items():
         df.to_excel(writer, sheet_name=species, index=False)
