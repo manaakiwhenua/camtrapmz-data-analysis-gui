@@ -8,11 +8,25 @@ from .main import run_pipeline, export_results
 import pandas as pd
 
 class CameraTrapApp(QWidget):
+    """
+    Camera Trap Analyzer GUI.
+
+    Attributes
+    ----------
+    file_path : Optional[str]
+        Path to the selected Excel file.
+    species_checks : List[QCheckBox]
+        Dynamically generated species selection checkboxes.
+    results_data : dict
+        Analysis results after pipeline execution.
+    """
     def __init__(self):
+        """Initialize the GUI window and components."""
         super().__init__()
         self.init_ui()
 
     def init_ui(self):
+        """Configure GUI layout, widgets, and signal connections."""
         self.setWindowTitle("Camera Trap Analyzer")
         self.setGeometry(100, 100, 600, 400)
 
@@ -68,6 +82,7 @@ class CameraTrapApp(QWidget):
         self.file_path = None
 
     def select_file(self):
+        """Open file dialog to select an Excel file and load species list."""
         path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel Files (*.xlsx)")
         if path:
             self.file_path = path
@@ -76,11 +91,13 @@ class CameraTrapApp(QWidget):
             self.log.append("File selected.")
     
     def toggle_select_all(self, state):
+        """Select or deselect all species checkboxes."""
         for chk in self.species_checks:
             chk.setChecked(state == 2)
 
     
     def load_species_from_file(self):
+        """Extract unique species from the Excel file and populate checkboxes."""
         try:
             df = pd.read_excel(self.file_path, sheet_name="Sheet1", engine="openpyxl")
             unique_species = sorted(df["Burst_class"].dropna().unique())
@@ -106,11 +123,22 @@ class CameraTrapApp(QWidget):
         except Exception as e:
             self.log.append(f"❌ Failed to load species: {str(e)}")
 
-
     def run_analysis(self):
-        results, messages = run_pipeline(self.file_path,
-                                 selected_species=[chk.text() for chk in self.species_checks if chk.isChecked()],
-                                 bin_days=int(self.bin_input.text()))
+        """Run the analysis pipeline and update state with results."""
+        if not self.file_path:
+            self.log.append("⚠️ Please select a file first.")
+            return
+
+        # Safe bin size: default to 7 if blank/invalid
+        bin_text = self.bin_input.text().strip()
+        try:
+            bin_days = int(bin_text) if bin_text else 7
+        except ValueError:
+            bin_days = 7
+            self.log.append("ℹ️ Invalid bin size; using default 7 days.")
+
+        selected = [chk.text() for chk in self.species_checks if chk.isChecked()]
+        results, messages = run_pipeline(self.file_path, selected_species=selected or None, bin_days=bin_days)
 
         if results is None:
             for msg in messages:
@@ -120,11 +148,16 @@ class CameraTrapApp(QWidget):
             self.results_data = results
             for msg in messages:
                 self.log.append(msg)
+            # Helpful summary
+            tr = results.get("trap_rates")
+            if tr is not None:
+                self.log.append(f"📈 Trap rates rows: {len(tr)}; columns: {list(tr.columns)}")
             self.log.append("✅ Analysis completed. You can now export results.")
             self.export_btn.setEnabled(True)
 
     
     def export_results(self):
+        """Export analysis results to Excel with embedded chart."""
         if not hasattr(self, "results_data") or self.results_data is None:
             self.log.append("⚠️ No analysis data available. Please run analysis first.")
             return
@@ -135,15 +168,18 @@ class CameraTrapApp(QWidget):
             return
 
         species_str = "-".join([chk.text() for chk in self.species_checks if chk.isChecked()])
-        bin_str = self.bin_input.text()
+        bin_text = self.bin_input.text().strip()
+        bin_str = bin_text if bin_text else "7"
         date_str = datetime.now().strftime("%Y-%m-%d")
         prefix = f"{folder}/camera_trap_{species_str}_bin{bin_str}_{date_str}"
 
         export_messages = export_results(self.results_data, output_prefix=prefix)
         for msg in export_messages:
             self.log.append(msg)
+        self.log.append(f"📊 Wrote trap rates & chart to sheet 'CameraTrapRates' in: {prefix}_output.xlsx")
 
 def launch_gui():
+    """Launch the Camera Trap Analyzer GUI app."""
     app = QApplication(sys.argv)
     gui = CameraTrapApp()
     gui.show()

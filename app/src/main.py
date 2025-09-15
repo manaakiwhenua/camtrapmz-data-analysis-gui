@@ -6,7 +6,7 @@ from .analysis import (
     create_detection_histories,
     write_detection_histories
 )
-from .plotter import plot_trap_rates
+from .plotter import add_trap_chart_to_sheet
 
 def run_pipeline(file_path: str, selected_species=None, bin_days=7) -> tuple:
     """Run the full analysis pipeline on the provided data file.
@@ -46,8 +46,8 @@ def run_pipeline(file_path: str, selected_species=None, bin_days=7) -> tuple:
     # Package results
     results = {
         "summary": summary_df,
-        "independent": independent_df,
         "trap_rates": trap_rates_df,
+        "independent": independent_df,
         "histories": histories_dict
     }
 
@@ -61,13 +61,17 @@ def export_results(results, output_prefix="camera_trap") -> list:
     Returns:
         messages (list): list of status messages from the export process"""
     try:
-        with pd.ExcelWriter(f"{output_prefix}_output.xlsx") as writer:
+        # IMPORTANT: use xlsxwriter so we can add charts BEFORE closing
+        with pd.ExcelWriter(f"{output_prefix}_output.xlsx", engine="xlsxwriter") as writer:
             results["summary"].to_excel(writer, sheet_name="CameraDateSummary", index=False)
-            results["independent"].to_excel(writer, sheet_name="IndependentDetections", index=False)
             results["trap_rates"].to_excel(writer, sheet_name="CameraTrapRates", index=False)
+            results["independent"].to_excel(writer, sheet_name="IndependentDetections", index=False)
             write_detection_histories(results["histories"], writer)
 
-        plot_trap_rates(results["trap_rates"], filename=f"{output_prefix}_trap_rates_plot.png")
-        return [f"📁 Exported to: {output_prefix}_output.xlsx and {output_prefix}_rates_plot.png"]
+            # add chart in the same writer session
+            add_trap_chart_to_sheet(writer, results["trap_rates"], sheet_name="CameraTrapRates",
+                                    table_start_row=0, table_start_col=0, place_chart_right=True)
+
+        return [f"📁 Exported to: {output_prefix}_output.xlsx"]
     except Exception as e:
         return [f"❌ Export failed: {str(e)}"]
