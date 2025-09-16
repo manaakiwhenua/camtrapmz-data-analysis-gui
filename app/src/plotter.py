@@ -34,7 +34,8 @@ def add_trap_chart_to_sheet(writer, df, sheet_name="CameraTrapRates",
         "y_error_bars": {
             "type": "custom",
             "plus_values":  [sheet_name, r0, c_plus,  r1, c_plus],
-            "minus_values": [sheet_name, r0, c_minus, r1, c_minus],
+            # Show only positive (upper) error bars
+            "direction": "plus",
         },
     })
     chart.set_title({"name": "Camera Trap Rate Per Species"})
@@ -47,5 +48,4 @@ def add_trap_chart_to_sheet(writer, df, sheet_name="CameraTrapRates",
         ws.insert_chart(table_start_row, table_start_col + len(df.columns) + 2, chart)
     else:
         ws.insert_chart(r1 + 3, table_start_col, chart)
-
 

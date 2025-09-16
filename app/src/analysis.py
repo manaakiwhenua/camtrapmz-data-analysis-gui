@@ -182,17 +182,22 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
     return out.sort_values("Rate_per100CamDays", ascending=False, ignore_index=True)
 
 ### 🧮 4. Create Detection Histories
-def create_detection_histories(file_path: str, species_list: list, bin_size: int) -> dict[str, pd.DataFrame]:
+def create_detection_histories(file_path: str, species_list: list, bin_size: int, sheet_name: str | None = None) -> dict[str, pd.DataFrame]:
     """Create detection histories for specified species with a given bin size.
     Args:
         file_path (str): path to the input Excel file
         species_list (list): list of species to include in the histories
         bin_size (int): number of days for binning detection histories
+        sheet_name (str | None): worksheet name to read raw data from; defaults to "Sheet1"
     Returns:
         dict: dictionary of DataFrames with detection histories for each species
     """
-    raw = pd.read_excel(file_path, sheet_name="Sheet1")
-    summary = pd.read_excel(file_path, sheet_name="CameraDateSummary")
+    raw = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
+    try:
+        summary = pd.read_excel(file_path, sheet_name="CameraDateSummary")
+    except Exception:
+        # Fallback: derive from raw if summary sheet not present in the workbook
+        summary = summarise_camera_dates(raw)
 
     # Ensure datetime types
     ensure_datetime_inplace(raw, "Date_taken")
@@ -220,7 +225,7 @@ def create_detection_histories(file_path: str, species_list: list, bin_size: int
             for i in range(len(bins) - 1):
                 bin_start, bin_end = bins[i], bins[i+1]
                 if not active[0] or bin_end < active[0] or bin_start > active[1]:
-                    row.append("-")
+                    row.append("NA")
                 elif has_detection(raw, cam, sp, bin_start, bin_end):
                     row.append(1)
                 else:

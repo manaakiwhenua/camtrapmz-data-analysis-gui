@@ -8,19 +8,20 @@ from .analysis import (
 )
 from .plotter import add_trap_chart_to_sheet
 
-def run_pipeline(file_path: str, selected_species=None, bin_days=7) -> tuple:
+def run_pipeline(file_path: str, selected_species=None, bin_days=7, sheet_name: str | None = None) -> tuple:
     """Run the full analysis pipeline on the provided data file.
     Args:
         file_path (str): path to the input Excel file
         selected_species (list): list of species to filter results, if None all species are included
         bin_days (int): number of days for binning detection histories
+        sheet_name (str | None): worksheet name to read raw data from; defaults to "Sheet1"
     Returns:
         results (dict): dictionary containing DataFrames of analysis results
         messages (list): list of status messages from the pipeline
     """
     messages = []
     try:
-        raw_df = pd.read_excel(file_path, sheet_name="Sheet1", engine="openpyxl")
+        raw_df = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"), engine="openpyxl")
         messages.append("📥 Data loaded successfully.")
     except Exception as e:
         return None, [f"❌ Failed to load data: {str(e)}"]
@@ -39,7 +40,7 @@ def run_pipeline(file_path: str, selected_species=None, bin_days=7) -> tuple:
         trap_rates_df = trap_rates_df[trap_rates_df["Species"].isin(selected_species)]
 
     histories_dict = create_detection_histories(
-        file_path, species_list=selected_species, bin_size=bin_days
+        file_path, species_list=selected_species, bin_size=bin_days, sheet_name=sheet_name
     )
     messages.append("📜 Created detection history tables.")
 

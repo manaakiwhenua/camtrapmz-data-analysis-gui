@@ -2,7 +2,8 @@ import sys
 from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QTextEdit,
-    QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea
+    QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea,
+    QInputDialog
 )
 from .main import run_pipeline, export_results
 import pandas as pd
@@ -97,16 +98,70 @@ class CameraTrapApp(QWidget):
 
     
     def load_species_from_file(self):
-        """Extract unique species from the Excel file and populate checkboxes."""
+        """Extract unique species from the Excel file and populate checkboxes.
+
+        Rules:
+        - Use "Sheet1" if present.
+        - If only one sheet, use that sheet.
+        - If multiple sheets, try auto-detect a sheet containing 'Burst_class'.
+          If none match, prompt user to choose a sheet.
+        """
         try:
-            df = pd.read_excel(self.file_path, sheet_name="Sheet1", engine="openpyxl")
+            xls = pd.ExcelFile(self.file_path, engine="openpyxl")
+
+            sheet_to_use = None
+            # Prefer Sheet1 if it exists
+            if "Sheet1" in xls.sheet_names:
+                sheet_to_use = "Sheet1"
+            # Single-sheet workbooks → use that sheet
+            elif len(xls.sheet_names) == 1:
+                sheet_to_use = xls.sheet_names[0]
+            else:
+                # Try auto-detect a reasonable sheet by column presence
+                for name in xls.sheet_names:
+                    try:
+                        head = xls.parse(name, nrows=5)
+                        if "Burst_class" in head.columns:
+                            sheet_to_use = name
+                            break
+                    except Exception:
+                        continue
+                # If still unknown, prompt the user to pick
+                if sheet_to_use is None:
+                    choice, ok = QInputDialog.getItem(
+                        self,
+                        "Select Worksheet",
+                        "Multiple sheets found. Choose one:",
+                        xls.sheet_names,
+                        0,
+                        False,
+                    )
+                    if not ok:
+                        self.log.append("⚠️ No sheet selected. Loading cancelled.")
+                        return
+                    sheet_to_use = choice
+
+            df = xls.parse(sheet_to_use)
+            if "Burst_class" not in df.columns:
+                raise ValueError(f"Required column 'Burst_class' not found in sheet '{sheet_to_use}'.")
+
             unique_species = sorted(df["Burst_class"].dropna().unique())
 
-            # Clear previous checkboxes
+            # Clear previous checkboxes (including an existing 'Select All')
             for chk in self.species_checks:
                 self.species_box.removeWidget(chk)
                 chk.deleteLater()
             self.species_checks = []
+
+            # Remove old 'Select All' if present
+            if hasattr(self, "select_all_chk") and self.select_all_chk is not None:
+                try:
+                    self.select_all_chk.stateChanged.disconnect()
+                except Exception:
+                    pass
+                self.species_box.removeWidget(self.select_all_chk)
+                self.select_all_chk.deleteLater()
+                self.select_all_chk = None
 
             # Add "Select All" checkbox
             self.select_all_chk = QCheckBox("Select All")
@@ -119,7 +174,10 @@ class CameraTrapApp(QWidget):
                 self.species_checks.append(chk)
                 self.species_box.addWidget(chk)
 
-            self.log.append(f"✅ Loaded {len(unique_species)} species from file.")
+            # Remember the sheet used (may be useful later)
+            self.selected_sheet = sheet_to_use
+
+            self.log.append(f"✅ Loaded {len(unique_species)} species from sheet '{sheet_to_use}'.")
         except Exception as e:
             self.log.append(f"❌ Failed to load species: {str(e)}")
 
@@ -138,7 +196,13 @@ class CameraTrapApp(QWidget):
             self.log.append("ℹ️ Invalid bin size; using default 7 days.")
 
         selected = [chk.text() for chk in self.species_checks if chk.isChecked()]
-        results, messages = run_pipeline(self.file_path, selected_species=selected or None, bin_days=bin_days)
+        sheet = getattr(self, "selected_sheet", None)
+        results, messages = run_pipeline(
+            self.file_path,
+            selected_species=selected or None,
+            bin_days=bin_days,
+            sheet_name=sheet
+        )
 
         if results is None:
             for msg in messages:
