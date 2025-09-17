@@ -84,7 +84,7 @@ Builds must be made on Windows (PyInstaller can’t cross‑compile from macOS/L
 2) Build
 - One‑file, windowed GUI:
   - `poetry run pyinstaller -F -w --name CamTrapNZAnalyzer --gui-script camtrapnzanalyzer --collect-all PyQt5 --collect-all matplotlib --collect-all pandas --collect-submodules openpyxl --collect-submodules xlsxwriter`
-- Output: `dist\CamTrapNZAnalyzer.exe`
+- Output: `dist\CamTrapNZ.exe`
 
 Notes
 - Use `--onedir` instead of `-F` for faster startup while testing.
@@ -96,10 +96,6 @@ Notes
 - `app/src/main.py` — pipeline orchestration and Excel export.
 - `app/src/plotter.py` — builds the Excel chart with error bars.
 - `app/src/gui.py` — PyQt5 GUI.
-
-## License
-
-[Specify your license here — MIT, Apache‑2.0, etc.]
 
 ## Support
 

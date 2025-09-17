@@ -43,4 +43,5 @@ pip-wheel-metadata/
 # ------------------------
 # Misc project-specific
 # ------------------------
-app/tests/data/*
+app/tests/data/input/
+app/tests/data/output/
