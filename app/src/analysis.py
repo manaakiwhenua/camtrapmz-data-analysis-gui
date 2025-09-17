@@ -137,27 +137,24 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
                          count_col: str = "Count",
                          z: float = 1.96) -> pd.DataFrame:
     """
-    Trap rates per 100 camera-days using Wilson (binomial) CI on p = count / total_days.
-
-    Notes:
-    - Ensure summary_df['NumberOfDays'] are *inclusive* calendar days.
-    - detections_df should be *independent detections* (after the 30-min rule).
-    - Each row counts as 1 unless a Count column is provided.
+    Trap rates per 100 camera-days using Wilson CI on p = count / total_days.
+    - summary_df['NumberOfDays'] should be inclusive (your code already does +1).
+    - detections_df should contain independent detections (30-min rule applied).
     """
-    # Effort (camera-days) as float
+    # 1) Effort
     total_days = float(pd.to_numeric(summary_df["NumberOfDays"], errors="coerce").fillna(0).sum())
     if total_days <= 0:
         raise ValueError("Total effort is zero; check NumberOfDays in summary_df.")
 
-    # Counts per species
+    # 2) Counts per species (default each row = 1)
     det = detections_df.copy()
     if count_col not in det.columns:
         det[count_col] = 1
     det[count_col] = pd.to_numeric(det[count_col], errors="coerce").fillna(1).astype(int)
 
-    counts = det.groupby(species_col, dropna=False)[count_col].sum()
+    counts = det.groupby(species_col, dropna=False, observed=True)[count_col].sum()
 
-    # Wilson CI on p = k / total_days (then scale ×100)
+    # 3) Wilson CI on p = k / total_days (scale ×100)
     rows = []
     for species, k in counts.items():
         p = k / total_days
@@ -167,19 +164,26 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
         lower  = (center - margin) / denom
         upper  = (center + margin) / denom
 
-        rate100 = round(p * 100.0, 2)
-        lo100   = round(lower * 100.0, 2)
-        up100   = round(upper * 100.0, 2)
+        rate100 = p * 100.0
+        lo100   = lower * 100.0
+        up100   = upper * 100.0
 
         rows.append([
             str(species) if pd.notna(species) else "Unknown",
-            rate100, lo100, up100,
-            round(rate100 - lo100, 2),
-            round(up100 - rate100, 2)
+            round(rate100, 2),
+            round(lo100, 2),
+            round(up100, 2),
+            round(rate100 - lo100, 2),  # MinusBar = Rate - Lower
+            round(up100 - rate100, 2),  # PlusBar  = Upper - Rate
         ])
 
-    out = pd.DataFrame(rows, columns=["Species", "Rate_per100CamDays", "Lower95CI", "Upper95CI", "MinusBar", "PlusBar"])
-    return out.sort_values("Rate_per100CamDays", ascending=False, ignore_index=True)
+    out = pd.DataFrame(rows, columns=[
+        "Species", "Rate_per100CamDays", "Lower95CI", "Upper95CI", "MinusBar", "PlusBar"
+    ])
+
+    # Sort for nicer charts (highest first), stable within ties by Species
+    out.sort_values(["Rate_per100CamDays","Species"], ascending=[False, True], inplace=True, ignore_index=True)
+    return out
 
 ### 🧮 4. Create Detection Histories
 def create_detection_histories(file_path: str, species_list: list, bin_size: int, sheet_name: str | None = None) -> dict[str, pd.DataFrame]:

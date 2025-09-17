@@ -1,51 +1,75 @@
-import matplotlib.pyplot as plt
 import pandas as pd
 
-def add_trap_chart_to_sheet(writer, df, sheet_name="CameraTrapRates",
-                            table_start_row=0, table_start_col=0, place_chart_right=True):
-    """Add a bar chart with error bars to an Excel sheet using xlsxwriter.
-    Args:
-        writer (pd.ExcelWriter): an open ExcelWriter with xlsxwriter engine
-        df (pd.DataFrame): DataFrame containing trap rate data
-        sheet_name (str): name of the sheet to add the chart to
-        table_start_row (int): starting row of the data table in the sheet
-        table_start_col (int): starting column of the data table in the sheet
-        place_chart_right (bool): if True, place chart to the right of the table; else below
+def add_trap_chart_to_sheet(
+    writer: pd.ExcelWriter,
+    df: pd.DataFrame,
+    sheet_name: str = "CameraTrapRates",
+    table_start_row: int = 0,
+    table_start_col: int = 0,
+    place_chart_right: bool = True,
+) -> None:
     """
-    # expects columns: Species, Rate_per100CamDays, Lower95CI, Upper95CI, MinusBar, PlusBar
-    required = ["Species","Rate_per100CamDays","Lower95CI","Upper95CI","MinusBar","PlusBar"]
-    missing = [c for c in required if c not in df.columns]
-    if missing or df.empty:
-        return  # nothing to chart or wrong columns
+    Clustered column chart with custom error bars bound directly to:
+      A Species, B Rate_per100CamDays, E MinusBar, F PlusBar
+
+    IMPORTANT: when the table is written with header at table_start_row,
+    the first DATA row in Excel is (table_start_row + 2).
+
+    Args:
+        writer: pd.ExcelWriter with xlsxwriter engine
+        df: DataFrame with required columns (Species, Rate_per100CamDays, MinusBar
+            PlusBar)
+        sheet_name: Name of the sheet where the table is written
+        table_start_row: Row index (0-based) where the table header is written
+        table_start_col: Column index (0-based) where the table starts
+        place_chart_right: If True, place chart to the right of the table;
+            otherwise, place it below the table.
+    Returns: None
+    """
+    required = ["Species","Rate_per100CamDays","MinusBar","PlusBar"]
+    if df.empty or any(c not in df.columns for c in required):
+        return
+
+    n = len(df)
+    if n == 0:
+        return
+
+    # Header at table_start_row  -> Excel row (table_start_row + 1)
+    # Data begins one row below header -> Excel row (table_start_row + 2)
+    first = table_start_row + 2               # <-- FIXED (was +1 before)
+    last  = first + n - 1
+    sheet_esc = sheet_name.replace("'", "''")
+
+    # Absolute A1 ranges (fixed columns A,B,E,F)
+    cats_rng  = f"$A${first}:$A${last}"
+    vals_rng  = f"$B${first}:$B${last}"
+    minus_rng = f"$E${first}:$E${last}"
+    plus_rng  = f"$F${first}:$F${last}"
 
     wb = writer.book
     ws = writer.sheets[sheet_name]
 
-    n = len(df)
-    r0 = table_start_row + 1                 # first data row (below header)
-    r1 = r0 + n - 1                          # last data row
-    c_species, c_rate, c_minus, c_plus = table_start_col+0, table_start_col+1, table_start_col+4, table_start_col+5
-
     chart = wb.add_chart({"type": "column"})
     chart.add_series({
-        "name":       "Rate per 100 Camera-Days",
-        "categories": [sheet_name, r0, c_species, r1, c_species],
-        "values":     [sheet_name, r0, c_rate,    r1, c_rate],
+        "name":       "Trap Rate per 100 Camera Days",
+        "categories": f"='{sheet_esc}'!{cats_rng}",
+        "values":     f"='{sheet_esc}'!{vals_rng}",
         "y_error_bars": {
             "type": "custom",
-            "plus_values":  [sheet_name, r0, c_plus,  r1, c_plus],
-            # Show only positive (upper) error bars
-            "direction": "plus",
+            "minus_values": f"='{sheet_esc}'!{minus_rng}",
+            "plus_values":  f"='{sheet_esc}'!{plus_rng}",
+            "end_style": 1,
         },
     })
-    chart.set_title({"name": "Camera Trap Rate Per Species"})
+
+    chart.set_title({"name": "Camera Trap Rate per Species"})
     chart.set_x_axis({"name": "Species"})
-    chart.set_y_axis({"name": "Trap Rate per 100 Camera Days"})
-    chart.set_legend({"position": "bottom"})
+    chart.set_y_axis({"name": "Trap Rate per 100 Camera Days", "min": 0})
+    chart.set_legend({"none": True})
     chart.set_style(10)
 
+    # Place chart
     if place_chart_right:
-        ws.insert_chart(table_start_row, table_start_col + len(df.columns) + 2, chart)
+        ws.insert_chart(table_start_row, table_start_col + df.shape[1] + 2, chart)
     else:
-        ws.insert_chart(r1 + 3, table_start_col, chart)
-
+        ws.insert_chart(last + 3, table_start_col, chart)
