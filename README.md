@@ -1,55 +1,106 @@
 # CamTrapNZ Data Analysis GUI
 
-A Python-based GUI application for analyzing camera-trap detection data. Designed to support wildlife monitoring workflows in Aotearoa New Zealand using outputs from CamTrapNZ.
+A lightweight PyQt5 app for analyzing camera‑trap detection data and exporting results to Excel with confidence‑interval charts.
 
-## 🧭 Overview
+## Overview
 
-This application provides an easy-to-use graphical interface for processing camera-trap image detection data. It includes tools for summarising image dates, identifying independent detections, calculating detection rates with confidence intervals, and visualising the results — all within a local Python environment.
+The app streamlines a common workflow:
+- Summarise first/last photo dates by camera.
+- Identify independent detections (30‑minute rule).
+- Compute trap rates per 100 camera‑days with 95% CIs (Wilson method).
+- Visualise rates with error bars and export tidy tables to Excel.
 
-## 📂 Project Structure
+## Requirements
 
-All core functionality is implemented as reusable Python functions inside the [`app/`](./app) directory:
+- Python 3.13 (as set in `pyproject.toml`).
+- Poetry for local development, or a Windows machine to build a one‑file EXE.
 
-- `summarise_camera_dates` – Defines functions for extracting first and last photo dates per camera
-- `identify_independent_detections` – Functions to identify independent detection events based on a user-defined time threshold
-- `calculate_camera_trap_rates` – Functions to calculate detection rates and bootstrap confidence intervals
-- `plot_trap_rates` – Functions to generate visualisations of detection rates with error bars
-- `main.py` – Launches the GUI and connects all components
+## Install (dev)
 
-## 🖥️ GUI Features
+- `poetry install`
+- Run the GUI: `poetry run camtrapnzanalyzer` (entry point → `app.src.gui:launch_gui`).
 
-- Upload detection data from Excel or CSV
-- Specify parameters such as species column, and time threshold (bin size)
-- Process data using modular analysis steps
-- Visualise detection rates and export summaries
-- Export results to Excel and PNG
+## Using the GUI
 
-## 🔽 Download
+- Browse to an Excel file. The app will:
+  - Use sheet "Sheet1" if present; if the workbook has only one sheet, it uses that; otherwise it auto‑detects a sheet containing `Burst_class` or prompts you to choose.
+- Select species (or use Select All) and optionally set a bin size (days) for detection histories.
+- Click Run Analysis, then Export Results to write an Excel workbook.
 
-Go to [Releases](https://github.com/manaakiwhenua/camtrapmz-data-analysis-gui/releases) and download the latest executable:
+## Expected Input Columns
 
-- 🪟 `camtrapnz.exe` (Windows)
-- 🍎 `camtrapnz` (macOS)
-- 🐧 `camtrapnz` (Linux)
+- `Label` (camera name, e.g., Cam01)
+- `Burst_class` (species)
+- `Date_taken` (photo timestamp)
+- Optional: `Count`
 
-## 🚀 Usage
+## Excel Output
 
-Double-click the executable to launch the Camera Trap Data Analysis GUI.
+The export writes `<prefix>_output.xlsx` with:
+- `CameraDateSummary` — camera, first/last dates, number of days.
+- `CameraTrapRates` — columns: `Species`, `Rate_per100CamDays`, `Lower95CI`, `Upper95CI`, `MinusBar`, `PlusBar`.
+- `IndependentDetections` — 30‑minute de‑duplicated records.
+- Per‑species sheets with detection histories.
 
-## 📊 Outputs
+The chart on `CameraTrapRates` shows bars at `Rate_per100CamDays` with error bars that end at `Lower95CI` and `Upper95CI` (implemented via `MinusBar = Rate − Lower95CI` and `PlusBar = Upper95CI − Rate`).
 
-- Cleaned detection datasets
-- Detection rates per species/site
-- Summary plots and Excel exports
+## Download for Windows (End Users)
 
-## 👥 Contributors
+- A ready‑to‑run Windows app will be published under Releases.
+- Download `CamTrapNZAnalyzer.exe` and place it anywhere (e.g., Desktop or Documents).
+- Double‑click to open the app.
 
-Maintained by the Digital Strategy Team at Manaaki Whenua – Landcare Research.
+System requirements
+- Windows 10 or 11.
+- No admin rights required. No Python installation required.
 
-## 📄 License
+First‑run notes
+- SmartScreen may warn about an unknown publisher:
+  - Click “More info” → “Run anyway”. The app runs fully offline.
 
-[Specify your license here — MIT, Apache-2.0, etc.]
+Uninstall / Update
+- To uninstall: delete the `CamTrapNZAnalyzer.exe` file and any exported results.
+- To update: download the new `CamTrapNZAnalyzer.exe` from Releases and replace the old one.
 
-## 📬 Contact
+Where to get it
+- Releases page: will be shared with each version. If you need an advance copy, contact the maintainer.
 
-For feature requests or bug reports, please use [GitHub Issues](https://github.com/manaakiwhenua/camtrapmz-data-analysis-gui/issues).
+## Troubleshooting
+
+- No species shown after selecting a file: ensure the chosen sheet has a `Burst_class` column.
+- Error bars look off: check `MinusBar`/`PlusBar` values in `CameraTrapRates` — the chart reads those columns directly.
+- macOS/Linux users: run via Poetry; packaging instructions above are Windows‑only.
+
+## Build a Windows EXE (For Developers)
+
+Builds must be made on Windows (PyInstaller can’t cross‑compile from macOS/Linux).
+
+1) Prepare environment
+- Install Python 3.13, Git, and PowerShell.
+- `py -3.13 -m venv .venv && .venv\Scripts\activate`
+- `pip install -U pip poetry`
+- `poetry install --with dev`
+
+2) Build
+- One‑file, windowed GUI:
+  - `poetry run pyinstaller -F -w --name CamTrapNZAnalyzer --gui-script camtrapnzanalyzer --collect-all PyQt5 --collect-all matplotlib --collect-all pandas --collect-submodules openpyxl --collect-submodules xlsxwriter`
+- Output: `dist\CamTrapNZAnalyzer.exe`
+
+Notes
+- Use `--onedir` instead of `-F` for faster startup while testing.
+- Add resources with `--add-data "from\path;to"` if you later include non‑code assets.
+
+## Project Structure
+
+- `app/src/analysis.py` — parsing/cleaning, independent detections, rate + CI computation.
+- `app/src/main.py` — pipeline orchestration and Excel export.
+- `app/src/plotter.py` — builds the Excel chart with error bars.
+- `app/src/gui.py` — PyQt5 GUI.
+
+## License
+
+[Specify your license here — MIT, Apache‑2.0, etc.]
+
+## Support
+
+For feature requests or bug reports, please open an issue in this repository.

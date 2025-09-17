@@ -28,7 +28,7 @@ class CameraTrapApp(QWidget):
 
     def init_ui(self):
         """Configure GUI layout, widgets, and signal connections."""
-        self.setWindowTitle("Camera Trap Analyzer")
+        self.setWindowTitle("CamTrapNZ Analyzer")
         self.setGeometry(100, 100, 600, 400)
 
         # File selection
