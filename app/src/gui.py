@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea,
     QInputDialog
 )
-from .main import run_pipeline, export_results
+from app.src.main import run_pipeline, export_results
 import pandas as pd
 
 class CameraTrapApp(QWidget):

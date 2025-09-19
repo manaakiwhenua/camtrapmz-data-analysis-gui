@@ -1,12 +1,12 @@
 import pandas as pd
-from .analysis import (
+from app.src.analysis import (
     summarise_camera_dates,
     identify_independent_detections,
     calculate_trap_rates,
     create_detection_histories,
     write_detection_histories
 )
-from .plotter import add_trap_chart_to_sheet
+from app.src.plotter import add_trap_chart_to_sheet
 
 def run_pipeline(file_path: str, selected_species=None, bin_days=7, sheet_name: str | None = None) -> tuple:
     """Run the full analysis pipeline on the provided data file.
