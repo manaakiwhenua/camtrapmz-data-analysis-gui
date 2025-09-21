@@ -77,13 +77,14 @@ Builds must be made on Windows (PyInstaller can’t cross‑compile from macOS/L
 
 1) Prepare environment
 - Install Python 3.13, Git, and PowerShell.
-- `py -3.13 -m venv .venv && .venv\Scripts\activate`
-- `pip install -U pip poetry`
-- `poetry install --with dev`
+- `python -m venv venv`
+- `.\venv\Scripts\Activate.ps1`
+- `python -m pip install -U pip wheel`
+- `pip install pyinstaller PyQt5 pandas openpyxl numpy xlsxwriter`
 
 2) Build
 - One‑file, windowed GUI:
-  - `poetry run pyinstaller -F -w --name CamTrapNZAnalyzer --gui-script camtrapnzanalyzer --collect-all PyQt5 --collect-all matplotlib --collect-all pandas --collect-submodules openpyxl --collect-submodules xlsxwriter`
+  - `python -m PyInstaller --onefile --windowed app\src\gui.py --name CamTrapNZAnalyzer --clean --collect-all PyQt5 --collect-all pandas --collect-submodules openpyxl --collect-submodules xlsxwriter`
 - Output: `dist\CamTrapNZ.exe`
 
 Notes
