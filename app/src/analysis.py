@@ -65,6 +65,24 @@ def extract_camera(label) -> str:
     m = re.search(r"(Cam\d{2})", str(label))
     return m.group(1) if m else ""
 
+# --- keep your ensure_datetime_inplace as-is ---
+def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
+    """Make dates proper datetimes and add a strict CameraID (CamNN)."""
+    df = df.copy()
+    ensure_datetime_inplace(df, "Date_taken")
+    df["CameraID"] = df["Label"].astype(str).str.extract(r"(Cam\d{2})")
+    df["Burst_class"] = df["Burst_class"].astype(str).str.strip()
+    return df
+
+# tiny debugger to verify the offending bin
+def debug_bin(df: pd.DataFrame, cam: str, sp: str,
+              start: datetime, end: datetime) -> pd.DataFrame:
+    sub = normalize_raw(df)
+    hit = sub[(sub["CameraID"] == cam) &
+              (sub["Burst_class"] == sp) &
+              (sub["Date_taken"].between(start, end, inclusive="left"))]
+    return hit.sort_values("Date_taken")[["CameraID","Burst_class","Date_taken","Label"]]
+
 def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime) -> bool:
     """Check if there are detections for a specific camera and species within a date range.
     Args:
@@ -76,9 +94,9 @@ def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: dat
     Returns:
         bool: True if there are detections, False otherwise
     """
-    sub = df[df["Label"].str.contains(cam, na=False) & (df["Burst_class"] == sp)]
+    sub = df[(df["CameraID"] == cam) & (df["Burst_class"] == sp)]
     # assumes df["Date_taken"] already datetime
-    return any((sub["Date_taken"] >= start) & (sub["Date_taken"] < end))
+    return sub["Date_taken"].between(start, end, inclusive="left").any()
 
 ### 1. Summarise Camera Dates
 def summarise_camera_dates(df: pd.DataFrame) -> pd.DataFrame:
@@ -186,7 +204,9 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
     return out
 
 ### 🧮 4. Create Detection Histories
-def create_detection_histories(file_path: str, species_list: list, bin_size: int, sheet_name: str | None = None) -> dict[str, pd.DataFrame]:
+def create_detection_histories(file_path: str, species_list: list,
+                               bin_size: int, sheet_name: str | None = None
+                               ) -> dict[str, pd.DataFrame]:
     """Create detection histories for specified species with a given bin size.
     Args:
         file_path (str): path to the input Excel file
@@ -196,47 +216,54 @@ def create_detection_histories(file_path: str, species_list: list, bin_size: int
     Returns:
         dict: dictionary of DataFrames with detection histories for each species
     """
-    raw = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
+    raw0 = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
+    raw = normalize_raw(raw0)
+
+    # load or derive summary
     try:
         summary = pd.read_excel(file_path, sheet_name="CameraDateSummary")
     except Exception:
-        # Fallback: derive from raw if summary sheet not present in the workbook
-        summary = summarise_camera_dates(raw)
-
-    # Ensure datetime types
-    ensure_datetime_inplace(raw, "Date_taken")
+        summary = summarise_camera_dates(raw0)
     for col in ("FirstPhoto", "LastPhoto"):
         if col in summary.columns:
             summary[col] = pd.to_datetime(summary[col], errors="coerce")
-    summary.dropna(subset=["FirstPhoto", "LastPhoto"], inplace=True)
+    summary = summary.dropna(subset=["FirstPhoto", "LastPhoto"]).copy()
 
+    # map CamNN -> (first,last)
     cam_dates = {
-        extract_camera(row["Camera"]): (row["FirstPhoto"], row["LastPhoto"])
-        for _, row in summary.iterrows() if extract_camera(row["Camera"])
+        re.search(r"(Cam\d{2})", str(row["Camera"])).group(1): (row["FirstPhoto"], row["LastPhoto"])
+        for _, row in summary.iterrows()
+        if re.search(r"(Cam\d{2})", str(row["Camera"]))
     }
 
-    start_date = raw["Date_taken"].min()
-    end_date = raw["Date_taken"].max() + timedelta(days=bin_size)
-    bins = get_bins(start_date, end_date, step=bin_size)
+    # anchor bins at midnight (so weekly bins align cleanly)
+    start_date = raw["Date_taken"].min().replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date   = (raw["Date_taken"].max() + timedelta(days=bin_size)).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    all_histories: dict[str, pd.DataFrame] = {}
+    bins = []
+    d = start_date
+    while d <= end_date:
+        bins.append(d)
+        d += timedelta(days=bin_size)
+
+    out: dict[str, pd.DataFrame] = {}
     for sp in species_list:
-        history, headers = [], ["Camera"] + [b.strftime("%Y-%m-%d") for b in bins[:-1]]
+        headers = ["Camera"] + [b.strftime("%Y-%m-%d") for b in bins[:-1]]
+        rows = []
         for r in range(1, 33):
             cam = f"Cam{r:02}"
-            active = cam_dates.get(cam, (None, None))
+            first, last = cam_dates.get(cam, (None, None))
             row = [cam]
             for i in range(len(bins) - 1):
-                bin_start, bin_end = bins[i], bins[i+1]
-                if not active[0] or bin_end < active[0] or bin_start > active[1]:
+                b0, b1 = bins[i], bins[i+1]
+                # outside active window → NA (matches VBA's "-")
+                if (first is None) or (b1 < first) or (b0 > last):
                     row.append("NA")
-                elif has_detection(raw, cam, sp, bin_start, bin_end):
-                    row.append(1)
                 else:
-                    row.append(0)
-            history.append(row)
-        all_histories[sp] = pd.DataFrame(history, columns=headers)
-    return all_histories
+                    row.append(1 if has_detection(raw, cam, sp, b0, b1) else 0)
+            rows.append(row)
+        out[sp] = pd.DataFrame(rows, columns=headers)
+    return out
 
 def write_detection_histories(histories_dict: dict, writer) -> None:
     """Write detection histories to an Excel writer.
