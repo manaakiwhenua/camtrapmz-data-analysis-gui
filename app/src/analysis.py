@@ -204,7 +204,7 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
     return out
 
 ### 🧮 4. Create Detection Histories
-def create_detection_histories(file_path: str, species_list: list,
+def create_detection_histories(df: pd.DataFrame, species_list: list,
                                bin_size: int, sheet_name: str | None = None
                                ) -> dict[str, pd.DataFrame]:
     """Create detection histories for specified species with a given bin size.
@@ -216,14 +216,12 @@ def create_detection_histories(file_path: str, species_list: list,
     Returns:
         dict: dictionary of DataFrames with detection histories for each species
     """
-    raw0 = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
-    raw = normalize_raw(raw0)
+    #raw0 = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
+    raw = normalize_raw(df)
 
-    # load or derive summary
-    try:
-        summary = pd.read_excel(file_path, sheet_name="CameraDateSummary")
-    except Exception:
-        summary = summarise_camera_dates(raw0)
+    # get camera active windows
+    summary = summarise_camera_dates(df)
+
     for col in ("FirstPhoto", "LastPhoto"):
         if col in summary.columns:
             summary[col] = pd.to_datetime(summary[col], errors="coerce")

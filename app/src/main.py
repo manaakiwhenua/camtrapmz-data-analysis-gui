@@ -19,12 +19,12 @@ def run_pipeline(file_path: str, selected_species=None, bin_days=7, sheet_name: 
         results (dict): dictionary containing DataFrames of analysis results
         messages (list): list of status messages from the pipeline
     """
-    messages = []
+    messages: list[str] = []
     try:
         raw_df = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"), engine="openpyxl")
         messages.append("📥 Data loaded successfully.")
     except Exception as e:
-        return None, [f"❌ Failed to load data: {str(e)}"]
+        return None, [f"❌ Failed to load data: {e}"]
 
     summary_df = summarise_camera_dates(raw_df)
     messages.append("📊 Summarized camera dates.")
@@ -40,7 +40,7 @@ def run_pipeline(file_path: str, selected_species=None, bin_days=7, sheet_name: 
         trap_rates_df = trap_rates_df[trap_rates_df["Species"].isin(selected_species)]
 
     histories_dict = create_detection_histories(
-        file_path, species_list=selected_species, bin_size=bin_days, sheet_name=sheet_name
+        raw_df, species_list=selected_species, bin_size=bin_days, sheet_name=sheet_name
     )
     messages.append("📜 Created detection history tables.")
 
@@ -54,17 +54,20 @@ def run_pipeline(file_path: str, selected_species=None, bin_days=7, sheet_name: 
 
     return results, messages
 
-def export_results(results, output_prefix: str = "camera_trap") -> list:
+def export_results(results, output_prefix: str = "camera_trap") -> str | None:
     """
     Write results to an Excel workbook and embed a chart on the CameraTrapRates sheet.
     - Uses xlsxwriter (charts must be added before closing the writer).
     - Cleans trap-rate rows to guarantee numeric columns and equal-length ranges.
-    """
-    try:
-        out_path = f"{output_prefix}_output.xlsx"
 
+    Returns:
+        str: path to the saved Excel file, or None if export failed
+    """
+    out_path = f"{output_prefix}_output.xlsx"
+
+    try:
         with pd.ExcelWriter(out_path, engine="xlsxwriter") as writer:
-            # 1) Always write the other sheets
+            # CameraDateSummary
             results["summary"].to_excel(writer, sheet_name="CameraDateSummary", index=False)
 
             # 2) Prepare trap rates in fixed column order (A..F expected by the plotter)
@@ -82,10 +85,8 @@ def export_results(results, output_prefix: str = "camera_trap") -> list:
                 subset=["Rate_per100CamDays", "MinusBar", "PlusBar"]
             ).reset_index(drop=True)
 
-            # 3) Write the cleaned table and add the chart
-            # Write table at (row=0, col=0): header is row 1 in Excel, data starts at row 2
-            startrow = 0
-            startcol = 0
+            # Write the cleaned table and add the chart
+            startrow, startcol = 0, 0
             trap_clean.to_excel(writer, sheet_name="CameraTrapRates", index=False,
                                 startrow=startrow, startcol=startcol)
 
@@ -95,10 +96,13 @@ def export_results(results, output_prefix: str = "camera_trap") -> list:
                 table_start_row=startrow, table_start_col=startcol, place_chart_right=True
             )
 
-            # 4) write independent detections and histories
+            # write independent detections and histories
             results["independent"].to_excel(writer, sheet_name="IndependentDetections", index=False)
             write_detection_histories(results["histories"], writer)
 
-        return [f"📁 Exported to: {out_path}"]
+        return out_path
+    
     except Exception as e:
-        return [f"❌ Export failed: {str(e)}"]
+        # Keep GUI quiet but return failure; print for developer visibility
+        print(f"[export_results] ERROR: {e}", flush=True)
+        return None
