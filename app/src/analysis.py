@@ -1,9 +1,9 @@
 import pandas as pd
-from math import sqrt
+import math
 from datetime import datetime, timedelta
 import re
 
-### 🔧 Utilities
+# ---------- Date parsing utilities ----------
 
 def parse_exif_date(date_str) -> datetime | None:
     """EXIF 'YYYY:MM:DD HH:MM:SS' → datetime, else None."""
@@ -18,34 +18,172 @@ def parse_exif_date(date_str) -> datetime | None:
 def ensure_datetime_inplace(df: pd.DataFrame, column: str = "Date_taken") -> pd.DataFrame:
     """
     Make df[column] a proper datetime:
-    - keep datetimes
-    - try pandas to_datetime
-    - fallback to EXIF parser
+      - keep datetimes
+      - try pandas to_datetime
+      - fallback to EXIF parser
     Drops rows where parsing fails.
     """
     s = df[column]
     # keep datetimes
     out = s.where(s.apply(lambda x: isinstance(x, datetime)))
-    
-    # try pandas parser
+
+    # try ISO-style first
     mask = out.isna()
     if mask.any():
-        # try ISO-style first
         out.loc[mask] = pd.to_datetime(s[mask], errors="coerce", format="%Y-%m-%d %H:%M:%S")
 
+    # then EXIF-style
     mask = out.isna()
     if mask.any():
-        # try EXIF-style
         out.loc[mask] = pd.to_datetime(s[mask], errors="coerce", format="%Y:%m:%d %H:%M:%S")
 
+    # final fallback: custom parser
     mask = out.isna()
     if mask.any():
-        # final fallback: custom EXIF parser
         out.loc[mask] = s[mask].apply(parse_exif_date)
 
     df[column] = out
     df.dropna(subset=[column], inplace=True)
     return df
+
+# ---------- Camera extraction helpers ----------
+
+def _split_path_parts(path: str) -> list[str]:
+    """Split a path on / or \\, collapse repeats, strip empties."""
+    parts = re.split(r"[\\/]+", str(path).strip())
+    return [p for p in parts if p != ""]
+
+_CAM_RE_NUM = re.compile(r'(?i)\bcam(?:era)?\s*0*([0-9]+)\b')
+
+def _camera_num(name: str) -> int:
+    """
+    Extract an integer camera ID from strings like:
+      'Cam8', 'Cam08', 'Cam 8', 'Camera12', 'Cam11 Dec21 to May22'
+    Returns +inf if no number is found so those sort last.
+    """
+    m = _CAM_RE_NUM.search(str(name))
+    return int(m.group(1)) if m else math.inf
+
+def _dedupe_camera_and_label(df: pd.DataFrame, keep_original_label: bool = False) -> pd.DataFrame:
+    """
+    Ensure we don't ship both 'Camera' and a duplicate 'Label'.
+    - If no 'Label', nothing to do.
+    - If 'Label' present and identical to 'Camera', drop 'Label'.
+    - If different and keep_original_label=True, rename to 'OriginalLabel';
+      else drop it.
+    """
+    if "Label" not in df.columns:
+        return df
+    if "Camera" not in df.columns:
+        return df
+
+    cam = df["Camera"].astype(str)
+    lab = df["Label"].astype(str)
+    if cam.equals(lab):
+        return df.drop(columns=["Label"])
+
+    if keep_original_label:
+        new_name = "OriginalLabel"
+        i = 1
+        while new_name in df.columns:
+            new_name = f"OriginalLabel_{i}"; i += 1
+        return df.rename(columns={"Label": new_name})
+
+    return df.drop(columns=["Label"])
+
+_CAM_FALLBACK_RE = re.compile(r"(?i)\b(cam\d{1,3})\b")
+
+def _camera_from_filename(path: str) -> tuple[str, str]:
+    r"""
+    Return (camera, source) where source ∈ {'second-seg','regex','none'}.
+    Prefers the *second* path segment, else regex (?i)\b(cam\d{1,3})\b.
+    """
+    parts = _split_path_parts(path)
+    if len(parts) >= 2 and parts[1]:
+        return parts[1], "second-seg"
+    m = _CAM_FALLBACK_RE.search(str(path))
+    if m:
+        return m.group(1), "regex"
+    return "", "none"
+
+def camera_extraction_report(df: pd.DataFrame) -> dict:
+    """Quick stats about how 'Camera' will be inferred from 'Filename'."""
+    rep = dict(total=len(df), has_filename=0, second_seg=0, regex=0, none=0, examples_none=[])
+    if "Filename" not in df.columns:
+        return rep
+    rep["has_filename"] = df["Filename"].notna().sum()
+    examples = []
+    for _, s in df["Filename"].dropna().items():
+        _, src = _camera_from_filename(s)
+        if src == "second-seg":
+            rep["second_seg"] += 1
+        elif src == "regex":
+            rep["regex"] += 1
+        else:
+            rep["none"] += 1
+            if len(examples) < 3:
+                examples.append(str(s))
+    rep["examples_none"] = examples
+    return rep
+
+def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
+    r"""
+    Normalize types and create a robust 'Camera' column.
+
+    Preference order for Camera:
+      1) Label (verbatim, if present and non-empty)
+      2) existing Camera column (if present and non-empty)
+      3) Filename → second path segment; else regex r"(?i)\bcam\d{1,3}\b"; else first non-empty segment
+      4) (legacy) parse Label as a path if all else fails
+
+    Adds 'Camera_source' for auditing. Drops rows with missing Camera or Date_taken.
+    """
+    df = df.copy()
+    ensure_datetime_inplace(df, "Date_taken")
+
+    camera = pd.Series("", index=df.index, dtype="object")
+    source = pd.Series("none", index=df.index, dtype="object")
+
+    # 1) Prefer Label
+    if "Label" in df.columns:
+        lab = df["Label"].astype(str).str.strip()
+        camera = lab.where(lab.ne(""), other=camera)
+        source.loc[camera.ne("")] = "label"
+
+    # 2) Existing Camera column
+    if "Camera" in df.columns:
+        cam_col = df["Camera"].astype(str).str.strip()
+        need = (camera == "") & cam_col.ne("")
+        camera.loc[need] = cam_col.loc[need]
+        source.loc[need] = "camera-col"
+
+    # 3) From Filename
+    if "Filename" in df.columns:
+        need = (camera == "") & df["Filename"].notna()
+        if need.any():
+            cams = df.loc[need, "Filename"].astype(str).apply(_camera_from_filename)
+            camera.loc[need] = cams.map(lambda x: x[0])
+            src = cams.map(lambda x: x[1])
+            source.loc[need & (source == "none")] = src
+
+    # 4) Try Label as a path (legacy)
+    if "Label" in df.columns:
+        need = (camera == "") & df["Label"].notna()
+        if need.any():
+            cams2 = df.loc[need, "Label"].astype(str).apply(_camera_from_filename)
+            camera.loc[need] = cams2.map(lambda x: x[0])
+            src2 = cams2.map(lambda x: x[1])
+            source.loc[need & (source == "none")] = src2
+
+    df["Camera"] = camera.str.strip()
+    if "Burst_class" in df.columns:
+        df["Burst_class"] = df["Burst_class"].astype(str).str.strip()
+
+    df["Camera_source"] = source
+    df = df[(df["Camera"] != "")].copy()  # require camera + date (date already enforced)
+    return df
+
+# ---------- Binning & queries ----------
 
 def get_bins(start_date: datetime, end_date: datetime, step: int = 7) -> list[datetime]:
     """Generate date bins from start to end date with a specified step in days.
@@ -61,27 +199,14 @@ def get_bins(start_date: datetime, end_date: datetime, step: int = 7) -> list[da
         d += timedelta(days=step)
     return bins
 
-def extract_camera(label) -> str:
-    m = re.search(r"(Cam\d{2})", str(label))
-    return m.group(1) if m else ""
-
-# --- keep your ensure_datetime_inplace as-is ---
-def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
-    """Make dates proper datetimes and add a strict CameraID (CamNN)."""
-    df = df.copy()
-    ensure_datetime_inplace(df, "Date_taken")
-    df["CameraID"] = df["Label"].astype(str).str.extract(r"(Cam\d{2})")
-    df["Burst_class"] = df["Burst_class"].astype(str).str.strip()
-    return df
-
 # tiny debugger to verify the offending bin
-def debug_bin(df: pd.DataFrame, cam: str, sp: str,
-              start: datetime, end: datetime) -> pd.DataFrame:
+def debug_bin(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime) -> pd.DataFrame:
+    """Inspect rows that fall into a specific [start, end) bin for a camera/species."""
     sub = normalize_raw(df)
-    hit = sub[(sub["CameraID"] == cam) &
+    hit = sub[(sub["Camera"] == cam) &
               (sub["Burst_class"] == sp) &
               (sub["Date_taken"].between(start, end, inclusive="left"))]
-    return hit.sort_values("Date_taken")[["CameraID","Burst_class","Date_taken","Label"]]
+    return hit.sort_values("Date_taken")[["Camera", "Burst_class", "Date_taken"] + ([ "Label"] if "Label" in sub.columns else [])]
 
 def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime) -> bool:
     """Check if there are detections for a specific camera and species within a date range.
@@ -94,77 +219,103 @@ def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: dat
     Returns:
         bool: True if there are detections, False otherwise
     """
-    sub = df[(df["CameraID"] == cam) & (df["Burst_class"] == sp)]
-    # assumes df["Date_taken"] already datetime
+    sub = df[(df["Camera"] == cam) & (df["Burst_class"] == sp)]
     return sub["Date_taken"].between(start, end, inclusive="left").any()
 
-### 1. Summarise Camera Dates
+# ---------- 1) Camera date summary ----------
+
 def summarise_camera_dates(df: pd.DataFrame) -> pd.DataFrame:
     """Summarise the first and last photo dates for each camera.
     Args:
-        df (DataFrame): DataFrame containing camera data with columns ["Label", "Date_taken"]
+        df (DataFrame): DataFrame containing detection data with columns ["Camera", "Date_taken
     Returns:
-        DataFrame: summary DataFrame with columns ["Camera", "FirstPhoto", "LastPhoto", "NumberOfDays"]
+        DataFrame: DataFrame with columns ["Camera", "FirstPhoto", "LastPhoto", "NumberOfDays"]
     """
-    df = df.copy()
-    ensure_datetime_inplace(df, "Date_taken")
-
-    # Aggregate first/last per camera
+    df = normalize_raw(df)
     g = (
-        df.groupby("Label", as_index=False)["Date_taken"]
+        df.groupby("Camera", as_index=False)["Date_taken"]
           .agg(FirstPhoto="min", LastPhoto="max")
-          .rename(columns={"Label": "Camera"})
     )
-
-    # Ensure true pandas datetime64[ns] dtypes on aggregated columns
     g["FirstPhoto"] = pd.to_datetime(g["FirstPhoto"], errors="coerce")
     g["LastPhoto"]  = pd.to_datetime(g["LastPhoto"],  errors="coerce")
 
-    # Compute inclusive calendar days (ignore time-of-day)
+    # inclusive calendar days
     first_d = g["FirstPhoto"].dt.floor("D")
     last_d  = g["LastPhoto"].dt.floor("D")
     g["NumberOfDays"] = (last_d - first_d).dt.days + 1
 
+    # natural camera ordering
+    g = (
+        g.assign(_camnum=g["Camera"].map(_camera_num), _orig=range(len(g)))
+         .sort_values(["_camnum", "_orig"], kind="stable")
+         .drop(columns=["_camnum","_orig"])
+    )
     return g[["Camera", "FirstPhoto", "LastPhoto", "NumberOfDays"]]
 
-### 2. Identify Independent Detections
+
+# ---------- 2) Independent detections ----------
+
 def identify_independent_detections(df: pd.DataFrame) -> pd.DataFrame:
-    """Identify independent detections based on a 30-minute threshold.
-    Args:
-        df (DataFrame): DataFrame containing detection data with columns ["Label", "Burst_class", "Date_taken"]
-    Returns:
-        DataFrame: DataFrame with independent detections, dropping duplicates within 30 minutes
     """
-    df = df.copy()
-    ensure_datetime_inplace(df, "Date_taken")
-    #df.sort_values("Date_taken", inplace=True)
+    Identify independent detections (>=30 min apart) per (Camera, Burst_class),
+    while preserving original column order and adding 'Camera' as the first column.
+    Final sort: Camera (numeric-aware) -> Date_taken.
+    """
+    # 1) Normalize to ensure Camera + valid datetimes
+    x = normalize_raw(df)
 
-    seen, out_rows = {}, []
-    for _, row in df.iterrows():
-        k = f"{row['Label']}|{row['Burst_class']}"
-        dt = row["Date_taken"]
-        if k not in seen or (dt - seen[k]) >= timedelta(minutes=30):
-            seen[k] = dt
-            out_rows.append(row)
-    return pd.DataFrame(out_rows)
+    # 2) Sort within groups to compute time gaps
+    x = x.sort_values(["Camera", "Burst_class", "Date_taken"], kind="stable")
 
-### 3. Calculate Trap Rates with Confidence Intervals
+    # 3) Keep first event per (Camera, Species), then keep rows with gap >= 30 minutes
+    gap = x.groupby(["Camera", "Burst_class"], sort=False)["Date_taken"].diff()
+    keep = gap.isna() | (gap >= pd.Timedelta(minutes=30))
+    out = x.loc[keep].copy()
+
+    # 4) Put 'Camera' first, keep other columns in original order
+    cols = out.columns.tolist()
+    if "Camera" in cols:
+        cols = ["Camera"] + [c for c in cols if c != "Camera"]
+        out = out[cols]
+
+    # 5) Avoid duplicate 'Label' vs 'Camera'
+    out = _dedupe_camera_and_label(out, keep_original_label=True)
+
+    # 6) Final ordering (Option A): Camera (numeric-aware) -> Date_taken
+    out = (
+        out.assign(_camnum=out["Camera"].map(_camera_num))
+           .sort_values(["_camnum", "Camera", "Date_taken"], kind="stable")
+           .drop(columns="_camnum")
+           .reset_index(drop=True)
+    )
+
+    return out
+
+# ---------- 3) Trap rates ----------
+
 def calculate_trap_rates(summary_df: pd.DataFrame,
                          detections_df: pd.DataFrame,
                          species_col: str = "Burst_class",
                          count_col: str = "Count",
                          z: float = 1.96) -> pd.DataFrame:
+    """Trap rates per 100 camera-days using Wilson CI on p = count / total_days.
+    Args:
+        summary_df (DataFrame): DataFrame summarizing camera dates with columns ["Camera", 
+            "FirstPhoto", "LastPhoto", "NumberOfDays"]
+        detections_df (DataFrame): DataFrame containing independent detections with columns
+            ["Camera", species_col, "Date_taken", (optional) count_col]
+        species_col (str): column name for species in detections_df
+        count_col (str): column name for count of detections in detections_df; if absent,
+            each row counts as 1
+        z (float): z-score for confidence interval (1.96 for 95% CI)
+    Returns:
+        DataFrame: DataFrame with columns ["Species", "Rate_per100CamDays", "Lower95CI",
+            "Upper95CI", "MinusBar", "PlusBar"]
     """
-    Trap rates per 100 camera-days using Wilson CI on p = count / total_days.
-    - summary_df['NumberOfDays'] should be inclusive (your code already does +1).
-    - detections_df should contain independent detections (30-min rule applied).
-    """
-    # 1) Effort
     total_days = float(pd.to_numeric(summary_df["NumberOfDays"], errors="coerce").fillna(0).sum())
     if total_days <= 0:
         raise ValueError("Total effort is zero; check NumberOfDays in summary_df.")
 
-    # 2) Counts per species (default each row = 1)
     det = detections_df.copy()
     if count_col not in det.columns:
         det[count_col] = 1
@@ -172,13 +323,12 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
 
     counts = det.groupby(species_col, dropna=False, observed=True)[count_col].sum()
 
-    # 3) Wilson CI on p = k / total_days (scale ×100)
     rows = []
     for species, k in counts.items():
         p = k / total_days
         denom  = 1.0 + (z**2) / total_days
         center = p + (z**2) / (2.0 * total_days)
-        margin = z * sqrt(p*(1.0 - p)/total_days + (z**2)/(4.0 * total_days**2))
+        margin = z * math.sqrt(p*(1.0 - p)/total_days + (z**2)/(4.0 * total_days**2))
         lower  = (center - margin) / denom
         upper  = (center + margin) / denom
 
@@ -191,19 +341,18 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
             round(rate100, 2),
             round(lo100, 2),
             round(up100, 2),
-            round(rate100 - lo100, 2),  # MinusBar = Rate - Lower
-            round(up100 - rate100, 2),  # PlusBar  = Upper - Rate
+            round(rate100 - lo100, 2),
+            round(up100 - rate100, 2),
         ])
 
     out = pd.DataFrame(rows, columns=[
-        "Species", "Rate_per100CamDays", "Lower95CI", "Upper95CI", "MinusBar", "PlusBar"
+        "Species","Rate_per100CamDays","Lower95CI","Upper95CI","MinusBar","PlusBar"
     ])
-
-    # Sort for nicer charts (highest first), stable within ties by Species
     out.sort_values(["Rate_per100CamDays","Species"], ascending=[False, True], inplace=True, ignore_index=True)
     return out
 
-### 🧮 4. Create Detection Histories
+# ---------- 4) Detection histories ----------
+
 def create_detection_histories(df: pd.DataFrame, species_list: list,
                                bin_size: int, sheet_name: str | None = None
                                ) -> dict[str, pd.DataFrame]:
@@ -219,49 +368,39 @@ def create_detection_histories(df: pd.DataFrame, species_list: list,
     #raw0 = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
     raw = normalize_raw(df)
 
-    # get camera active windows
-    summary = summarise_camera_dates(df)
-
+    # active windows
+    summary = summarise_camera_dates(df).copy()
     for col in ("FirstPhoto", "LastPhoto"):
         if col in summary.columns:
             summary[col] = pd.to_datetime(summary[col], errors="coerce")
     summary = summary.dropna(subset=["FirstPhoto", "LastPhoto"]).copy()
+    cam_dates = dict(zip(summary["Camera"], zip(summary["FirstPhoto"], summary["LastPhoto"])))
 
-    # map CamNN -> (first,last)
-    cam_dates = {
-        re.search(r"(Cam\d{2})", str(row["Camera"])).group(1): (row["FirstPhoto"], row["LastPhoto"])
-        for _, row in summary.iterrows()
-        if re.search(r"(Cam\d{2})", str(row["Camera"]))
-    }
-
-    # anchor bins at midnight (so weekly bins align cleanly)
+    # bin edges anchored at midnight
     start_date = raw["Date_taken"].min().replace(hour=0, minute=0, second=0, microsecond=0)
     end_date   = (raw["Date_taken"].max() + timedelta(days=bin_size)).replace(hour=0, minute=0, second=0, microsecond=0)
+    bins = get_bins(start_date, end_date, step=bin_size)
 
-    bins = []
-    d = start_date
-    while d <= end_date:
-        bins.append(d)
-        d += timedelta(days=bin_size)
+    # camera order = first-seen order in data (so it matches user expectations)
+    cams_in_order = sorted(pd.unique(raw["Camera"]), key=_camera_num)
+    species_to_use = species_list or sorted(raw["Burst_class"].dropna().unique())
 
-    out: dict[str, pd.DataFrame] = {}
-    for sp in species_list:
+    all_hist: dict[str, pd.DataFrame] = {}
+    for sp in species_to_use:
         headers = ["Camera"] + [b.strftime("%Y-%m-%d") for b in bins[:-1]]
         rows = []
-        for r in range(1, 33):
-            cam = f"Cam{r:02}"
+        for cam in cams_in_order:
             first, last = cam_dates.get(cam, (None, None))
             row = [cam]
             for i in range(len(bins) - 1):
                 b0, b1 = bins[i], bins[i+1]
-                # outside active window → NA (matches VBA's "-")
                 if (first is None) or (b1 < first) or (b0 > last):
                     row.append("NA")
                 else:
                     row.append(1 if has_detection(raw, cam, sp, b0, b1) else 0)
             rows.append(row)
-        out[sp] = pd.DataFrame(rows, columns=headers)
-    return out
+        all_hist[sp] = pd.DataFrame(rows, columns=headers)
+    return all_hist
 
 def write_detection_histories(histories_dict: dict, writer) -> None:
     """Write detection histories to an Excel writer.

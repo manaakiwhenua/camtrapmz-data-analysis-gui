@@ -256,6 +256,11 @@ class CameraTrapApp(QWidget):
             self.export_btn.setEnabled(False)
             return
         
+        # Show camera extraction notes (the ones that start with ⚠️, ℹ️, ✅)
+        for msg in messages:
+            if msg.startswith(("⚠️","ℹ️","✅")):
+                self.log.append(msg)
+
         self.results_data = results
         # compact summary instead of step-by-step spam
         n_cam = len(results["summary"])
