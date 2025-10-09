@@ -4,10 +4,12 @@ from datetime import datetime
 import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QTextEdit,
-    QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea, QInputDialog
+    QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox, QScrollArea, QInputDialog, QTextBrowser, QDialog, QVBoxLayout
 )
 from PyQt5.QtCore import Qt
 from app.src.main import run_pipeline, export_results
+
+README_URL = "https://github.com/manaakiwhenua/camtrapmz-data-analysis-gui"
 
 class CameraTrapApp(QWidget):
     """
@@ -22,7 +24,6 @@ class CameraTrapApp(QWidget):
     """
 
     def __init__(self):
-        """Initialize the GUI window and components."""
         super().__init__()
         self.file_path: str | None = None
         self.selected_sheet: str | None = None
@@ -31,16 +32,33 @@ class CameraTrapApp(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        """Configure GUI layout, widgets, and signal connections."""
         self.setWindowTitle("CamTrapNZ Analyzer")
         self.setGeometry(100, 100, 700, 500)
 
-        # File selection
-        self.file_label = QLabel("No file selected")
-        self.browse_btn = QPushButton("Browse Excel")
+        # Main layout
+        layout = QVBoxLayout()
+        self.setLayout(layout)
 
-        #Species selection (dynamic)
-        self.species_checks = []
+        # File row: label, Browse + Help
+        self.file_label = QLabel("No file selected")
+        layout.addWidget(self.file_label)
+
+        self.browse_btn = QPushButton("Browse Excel")
+        self.help_btn = QPushButton("Help")
+        header_row = QHBoxLayout()
+        header_row.addWidget(self.browse_btn)
+        header_row.addStretch()
+        header_row.addWidget(self.help_btn)
+        layout.addLayout(header_row)
+
+        self.hint = QLabel(
+            'Tip: Export from CamTrapNZ with “Retain subfolders” ON so '
+            'Filename looks like images/Cam02/IMG_0001.JPG.'
+        )
+        self.hint.setStyleSheet("color: #666; font-style: italic;")
+        layout.addWidget(self.hint)
+
+        # Species selection (dynamic list inside scroll)
         self.species_box = QVBoxLayout()
         self.species_group = QWidget()
         self.species_group.setLayout(self.species_box)
@@ -51,54 +69,76 @@ class CameraTrapApp(QWidget):
         self.scroll.setMinimumHeight(140)
         self.scroll.setMaximumHeight(240)
 
-        # Select All stays OUTSIDE the scroll so it's always visible
+        # "Select All" outside scroll
         self.select_all_chk = QCheckBox("Select All")
         self.select_all_chk.stateChanged.connect(self._toggle_select_all)
 
-        # Header row: "Select species:" [..............] [Select All]
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Select species:"))
-        header.addStretch()
-        header.addWidget(self.select_all_chk)
+        species_hdr = QHBoxLayout()
+        species_hdr.addWidget(QLabel("Select species:"))
+        species_hdr.addStretch()
+        species_hdr.addWidget(self.select_all_chk)
+        layout.addLayout(species_hdr)
+        layout.addWidget(self.scroll)
 
-        # Bin size input
+        # Bin size
+        layout.addWidget(QLabel("Select bin size:"))
         self.bin_input = QLineEdit()
         self.bin_input.setPlaceholderText("Bin size in days (e.g. 7)")
+        layout.addWidget(self.bin_input)
 
-        # Action buttons
+        # Actions
         self.run_btn = QPushButton("Run Analysis")
         self.export_btn = QPushButton("Export Results")
-        self.export_btn.setEnabled(False)  # Initially disabled
+        self.export_btn.setEnabled(False)
 
-        # Log output
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-
-        # Layout setup
-        layout = QVBoxLayout()
-        layout.addWidget(self.file_label)
-        layout.addWidget(self.browse_btn)
-        layout.addLayout(header)
-        layout.addWidget(self.scroll)
-        layout.addWidget(QLabel("Select bin size:"))
-        layout.addWidget(self.bin_input)
         layout.addWidget(self.run_btn)
         layout.addWidget(self.export_btn)
-        layout.addWidget(QLabel("Log:"))
-        layout.addWidget(self.log)
-        self.setLayout(layout)
 
-        # Connect buttons to functions
+        # Log
+        layout.addWidget(QLabel("Log:"))
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(self.log)
+
+        # Connections
         self.browse_btn.clicked.connect(self._select_file)
+        self.help_btn.clicked.connect(self._show_help)
         self.run_btn.clicked.connect(self.run_analysis)
         self.export_btn.clicked.connect(self.export_results_clicked)
 
+    # ---------- Help dialog ----------
+    def _show_help(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("CamTrapNZ Analyzer – Help")
+        lay = QVBoxLayout(dlg)
+        html = f"""
+        <h3>CamTrapNZ Analyzer – Help</h3>
+        <p>Export from CamTrapNZ with <b>“Retain subfolders”</b> enabled so the camera
+        folder appears in <code>Filename</code>.</p>
+        <p>Full instructions and screenshots in the
+        <a href="{README_URL}">README</a>.</p>
+        <hr>
+        <p><b>Binning:</b> weeks are left-closed, right-open [start, end);
+        cameras outside their active window are marked “NA”.</p>
+        """
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(True)   # let the OS/browser open the link
+        view.setHtml(html)
+        lay.addWidget(view)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(close_btn)
+
+        dlg.resize(720, 520)
+        dlg.exec_()
+
+    # ---------- File & species ----------
     def _select_file(self) -> None:
-        """Open file dialog to select an Excel file and load species list."""
         path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel Files (*.xlsx)")
         if not path:
             return
-        
         self.file_path = path
         try:
             species_count, sheet = self._load_species_from_file()
@@ -109,10 +149,8 @@ class CameraTrapApp(QWidget):
             self.file_path = None
             self.selected_sheet = None
             self.export_btn.setEnabled(False)
-    
+
     def _toggle_select_all(self, state: int) -> None:
-        """Toggle all species checkboxes to match the Select All state."""
-        # Ignore programmatic PartiallyChecked transitions
         if state == Qt.PartiallyChecked:
             return
         check = (state == Qt.Checked)
@@ -120,24 +158,20 @@ class CameraTrapApp(QWidget):
             was = chk.blockSignals(True)
             chk.setChecked(check)
             chk.blockSignals(was)
-        # normalize to non-tristate after bulk op
         was = self.select_all_chk.blockSignals(True)
         self.select_all_chk.setTristate(False)
         self.select_all_chk.setCheckState(Qt.Checked if check else Qt.Unchecked)
         self.select_all_chk.blockSignals(was)
 
     def _update_select_all(self) -> None:
-        """Keep Select All in sync with individual boxes."""
         if not self.species_checks:
             was = self.select_all_chk.blockSignals(True)
             self.select_all_chk.setTristate(False)
             self.select_all_chk.setCheckState(Qt.Unchecked)
             self.select_all_chk.blockSignals(was)
             return
-
         total = len(self.species_checks)
         checked = sum(chk.isChecked() for chk in self.species_checks)
-
         was = self.select_all_chk.blockSignals(True)
         if checked == 0:
             self.select_all_chk.setTristate(False)
@@ -149,30 +183,18 @@ class CameraTrapApp(QWidget):
             self.select_all_chk.setTristate(True)
             self.select_all_chk.setCheckState(Qt.PartiallyChecked)
         self.select_all_chk.blockSignals(was)
-    
-    def _load_species_from_file(self) -> tuple[int, str]:
-        """Read the workbook, pick a reasonable sheet, and populate species checkboxes.
 
-        Rules:
-        - Use "Sheet1" if present.
-        - If only one sheet, use that sheet.
-        - If multiple sheets, try auto-detect a sheet containing 'Burst_class'.
-          If none match, prompt user to choose a sheet.
-        """
+    def _load_species_from_file(self) -> tuple[int, str]:
         if not self.file_path:
             raise ValueError("No file path set.")
-        
         xls = pd.ExcelFile(self.file_path, engine="openpyxl")
 
         sheet_to_use: str | None = None
-        # Prefer Sheet1 if it exists
         if "Sheet1" in xls.sheet_names:
             sheet_to_use = "Sheet1"
-        # Single-sheet workbooks → use that sheet
         elif len(xls.sheet_names) == 1:
             sheet_to_use = xls.sheet_names[0]
         else:
-            # Try auto-detect a reasonable sheet by column presence
             for name in xls.sheet_names:
                 try:
                     head = xls.parse(name, nrows=5)
@@ -181,7 +203,6 @@ class CameraTrapApp(QWidget):
                         break
                 except Exception:
                     continue
-            # If still unknown, prompt the user to pick
             if sheet_to_use is None:
                 choice, ok = QInputDialog.getItem(
                     self, "Select Worksheet",
@@ -196,7 +217,6 @@ class CameraTrapApp(QWidget):
         if "Burst_class" not in df.columns:
             raise ValueError(f"Required column 'Burst_class' not found in sheet '{sheet_to_use}'.")
 
-        # Clean species strings
         unique_species = (
             pd.Series(df["Burst_class"])
             .dropna()
@@ -206,16 +226,13 @@ class CameraTrapApp(QWidget):
         )
         unique_species = sorted(unique_species)
 
-        # Clear previous species (leave self.select_all_chk alone)
+        # wipe and rebuild species list
         for chk in self.species_checks:
             self.species_box.removeWidget(chk)
             chk.deleteLater()
         self.species_checks = []
-
-        # Add species checkboxes (inside scroll)
         for sp in unique_species:
             chk = QCheckBox(sp)
-            # keep Select All synchronized with manual changes
             chk.stateChanged.connect(self._update_select_all)
             self.species_checks.append(chk)
             self.species_box.addWidget(chk)
@@ -224,15 +241,12 @@ class CameraTrapApp(QWidget):
         self._update_select_all()
         return len(unique_species), sheet_to_use
 
-# ------------- Pipeline --------------
-
+    # ---------- Pipeline ----------
     def run_analysis(self) -> None:
-        """Run the analysis pipeline and hold the results in memory."""
         if not self.file_path:
             self.log.append("⚠️ Please select a file first.")
             return
 
-        # Safe bin size: default to 7 if blank/invalid
         bin_text = self.bin_input.text().strip()
         try:
             bin_days = int(bin_text) if bin_text else 7
@@ -255,24 +269,20 @@ class CameraTrapApp(QWidget):
                 self.log.append(msg)
             self.export_btn.setEnabled(False)
             return
-        
-        # Show camera extraction notes (the ones that start with ⚠️, ℹ️, ✅)
+
         for msg in messages:
-            if msg.startswith(("⚠️","ℹ️","✅")):
+            if msg.startswith(("⚠️", "ℹ️", "✅")):
                 self.log.append(msg)
 
         self.results_data = results
-        # compact summary instead of step-by-step spam
         n_cam = len(results["summary"])
         n_ind = len(results["independent"])
-        n_tr  = len(results["trap_rates"])
+        n_tr = len(results["trap_rates"])
         self.log.append(f"✅ Analysis complete — cameras: {n_cam}, detections: {n_ind} (indep), trap-rate species: {n_tr}")
         self.export_btn.setEnabled(True)
 
-# ------------- Export --------------
-    
+    # ---------- Export ----------
     def export_results_clicked(self) -> None:
-        """Write the Excel workbook with embedded chart."""
         if not self.results_data:
             self.log.append("⚠️ No analysis data available. Please run analysis first.")
             return
@@ -289,19 +299,18 @@ class CameraTrapApp(QWidget):
         prefix = f"{folder}/camera_trap_{species_str}_bin{bin_txt}_{date_str}"
 
         out_path = export_results(self.results_data, output_prefix=prefix)
-        # export_results currently returns a list with one message; take the path out:
         if out_path is None:
             self.log.append("❌ Export failed (see console).")
             return
-        
         self.log.append(f"💾 Saved: {out_path} (chart in 'CameraTrapRates')")
 
+
 def launch_gui():
-    """Launch the Camera Trap Analyzer GUI app."""
     app = QApplication(sys.argv)
     gui = CameraTrapApp()
     gui.show()
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     launch_gui()

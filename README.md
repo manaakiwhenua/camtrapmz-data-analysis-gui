@@ -1,75 +1,115 @@
 # CamTrapNZ Data Analysis GUI
 
-A lightweight PyQt5 app for analyzing camera‑trap detection data and exporting results to Excel with confidence‑interval charts.
+A lightweight **PyQt5 desktop app** for analyzing camera-trap detection data exported from CamTrapNZ.
+It summarizes effort, identifies independent detections, computes trap rates, and exports formatted Excel reports with confidence-interval charts.
 
-## Overview
+## 🧭 Overview
 
-The app streamlines a common workflow:
+The app streamlines a standard analysis workflow for CamTrapNZ projects:
 - Summarise first/last photo dates by camera.
-- Identify independent detections (30‑minute rule).
-- Compute trap rates per 100 camera‑days with 95% CIs (Wilson method).
-- Visualise rates with error bars and export tidy tables to Excel.
+- Identify **independent detections** (≥30‑minute rule).
+- Compute **trap rates per 100 camera‑days** with **95% CIs (Wilson method)**.
+- Visualise rates with error bars and export tidy Excel tables.
 
-## Requirements
+## 🧩 Input Data Requirements
 
-- Python 3.13 (as set in `pyproject.toml`).
-- Poetry for local development, or a Windows machine to build a one‑file EXE.
+### ✅ Export correctly from CamTrapNZ
 
-## Install (dev)
+**You must enable “Retain subfolders” when exporting.**
 
-- `poetry install`
-- Run the GUI: `poetry run camtrapnzanalyzer` (entry point → `app.src.gui:launch_gui`).
+This preserves the folder names (camera IDs) in your `Filename` column so that  
+the Analyzer can infer camera names like **Cam01**, **Camera12**, etc.
 
-## Using the GUI
+Example export structure:
 
-- Browse to an Excel file. The app will:
-  - Use sheet "Sheet1" if present; if the workbook has only one sheet, it uses that; otherwise it auto‑detects a sheet containing `Burst_class` or prompts you to choose.
-- Select species (or use Select All) and optionally set a bin size (days) for detection histories.
-- Click Run Analysis, then Export Results to write an Excel workbook.
+images/
+├── Cam01/
+│ ├── IMG_0001.JPG
+│ ├── IMG_0002.JPG
+├── Cam02/
+│ └── IMG_0500.JPG
 
-## Expected Input Columns
 
-- `Label` (camera name, e.g., Cam01)
-- `Burst_class` (species)
-- `Date_taken` (photo timestamp)
-- Optional: `Count`
+Then, in Excel, your `Filename` column will contain values like:
 
-## Excel Output
+images/Cam01/IMG_0001.JPG
+images\Cam02\IMG_0500.JPG
+
+🧠 **Priority for Camera ID detection**
+
+The Analyzer determines the “Camera” column automatically in this order:
+1. Existing `Camera` column (if non-empty)  
+2. `Label` column (verbatim)  
+3. From `Filename` — second path segment (e.g., `images/Cam02/...`)  
+4. Fallback regex (e.g., finds “cam12” in the text)
+
+If all methods fail, the Analyzer will **warn you before continuing**.
+
+---
+
+## 🖥️ Using the GUI
+
+1. **Launch the app**
+   - Windows: double-click `CamTrapNZAnalyzer.exe`
+   - macOS/Linux (dev mode): `poetry run camtrapnzanalyzer`
+
+2. **Select your Excel file**
+   - The app auto-detects the correct sheet or lets you pick one.
+   - If cameras can’t be inferred, a warning dialog explains how to fix it.
+
+3. **Select species**
+   - Use “Select All” to include all species or tick specific ones.
+
+4. **Run Analysis**
+   - The app summarizes camera usage, computes trap rates, and builds weekly (or custom-bin) detection histories.
+
+5. **Export Results**
+   - Produces a single Excel workbook:
+     - `CameraDateSummary`
+     - `CameraTrapRates` (with chart)
+     - `IndependentDetections`
+     - One sheet per species for detection histories
+
+---
+
+## 📊 Excel Output Details
 
 The export writes `<prefix>_output.xlsx` with:
-- `CameraDateSummary` — camera, first/last dates, number of days.
-- `CameraTrapRates` — columns: `Species`, `Rate_per100CamDays`, `Lower95CI`, `Upper95CI`, `MinusBar`, `PlusBar`.
-- `IndependentDetections` — 30‑minute de‑duplicated records.
-- Per‑species sheets with detection histories.
+
+- **`CameraDateSummary`** — camera, first/last dates, number of days  
+- **`CameraTrapRates`** — columns: `Species`, `Rate_per100CamDays`, `Lower95CI`, `Upper95CI`, `MinusBar`, `PlusBar`  
+- **`IndependentDetections`** — 30-minute de-duplicated records  
+- **Detection history sheets** — one per species  
 
 The chart on `CameraTrapRates` shows bars at `Rate_per100CamDays` with error bars that end at `Lower95CI` and `Upper95CI` (implemented via `MinusBar = Rate − Lower95CI` and `PlusBar = Upper95CI − Rate`).
 
-## Download for Windows (End Users)
+---
 
-- A ready‑to‑run Windows app will be published under Releases.
-- Download `CamTrapNZAnalyzer.exe` and place it anywhere (e.g., Desktop or Documents).
-- Double‑click to open the app.
+## 🪟 Download for Windows (End Users)
 
-System requirements
-- Windows 10 or 11.
-- No admin rights required. No Python installation required.
+- Download **`CamTrapNZAnalyzer.exe`** from the project’s Releases page.
+- Place it anywhere (Desktop or Documents).
+- Double-click to open — **no installation required**.
 
-First‑run notes
-- SmartScreen may warn about an unknown publisher:
-  - Click “More info” → “Run anyway”. The app runs fully offline.
+### System Requirements
+- Windows 10 or 11  
+- No admin rights or Python installation needed
 
-Uninstall / Update
-- To uninstall: delete the `CamTrapNZAnalyzer.exe` file and any exported results.
-- To update: download the new `CamTrapNZAnalyzer.exe` from Releases and replace the old one.
+### First Run
+SmartScreen may warn about an unknown publisher:  
+→ Click “More info” → “Run anyway” (app runs fully offline).
 
-Where to get it
-- Releases page: will be shared with each version. If you need an advance copy, contact the maintainer.
+### Update or Remove
+- To update: download and replace the `.exe` file  
+- To remove: delete the `.exe` and any exported results
 
-## Troubleshooting
+---
 
-- No species shown after selecting a file: ensure the chosen sheet has a `Burst_class` column.
-- Error bars look off: check `MinusBar`/`PlusBar` values in `CameraTrapRates` — the chart reads those columns directly.
-- macOS/Linux users: run via Poetry; packaging instructions above are Windows‑only.
+## 🧰 Developer Install
+
+```bash
+poetry install
+poetry run camtrapnzanalyzer
 
 ## Build a Windows EXE (For Developers)
 
