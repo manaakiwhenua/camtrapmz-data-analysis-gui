@@ -48,11 +48,6 @@ def ensure_datetime_inplace(df: pd.DataFrame, column: str = "Date_taken") -> pd.
 
 # ---------- Camera extraction helpers ----------
 
-def _split_path_parts(path: str) -> list[str]:
-    """Split a path on / or \\, collapse repeats, strip empties."""
-    parts = re.split(r"[\\/]+", str(path).strip())
-    return [p for p in parts if p != ""]
-
 _CAM_RE_NUM = re.compile(r'(?i)\bcam(?:era)?\s*0*([0-9]+)\b')
 
 def _camera_num(name: str) -> int:
@@ -94,93 +89,140 @@ def _dedupe_camera_and_label(df: pd.DataFrame, keep_original_label: bool = False
 _CAM_FALLBACK_RE = re.compile(r"(?i)\b(cam\d{1,3})\b")
 
 def _camera_from_filename(path: str) -> tuple[str, str]:
-    r"""
-    Return (camera, source) where source ∈ {'second-seg','regex','none'}.
-    Prefers the *second* path segment, else regex (?i)\b(cam\d{1,3})\b.
     """
-    parts = _split_path_parts(path)
+    Return (camera, source) where source ∈ {'second-seg','regex','none'}.
+    (Species-misread handled in normalize_raw; this function only extracts.)
+    """
+    parts = re.split(r"[\\/]+", str(path).strip())
     if len(parts) >= 2 and parts[1]:
         return parts[1], "second-seg"
-    m = _CAM_FALLBACK_RE.search(str(path))
+    m = re.search(r"(?i)\b(cam\d{1,3})\b", str(path))
     if m:
         return m.group(1), "regex"
     return "", "none"
 
 def camera_extraction_report(df: pd.DataFrame) -> dict:
-    """Quick stats about how 'Camera' will be inferred from 'Filename'."""
-    rep = dict(total=len(df), has_filename=0, second_seg=0, regex=0, none=0, examples_none=[])
+    """Quick stats about how 'Camera' might be inferred from 'Filename'."""
+    rep = dict(
+        total=len(df), has_filename=0,
+        second_seg=0, regex=0, none=0,
+        species_misread=0,  # NEW
+        examples_none=[], examples_species=[]
+    )
     if "Filename" not in df.columns:
         return rep
+
     rep["has_filename"] = df["Filename"].notna().sum()
-    examples = []
+
+    # Lowercased species set for misread detection
+    species_set = set(
+        pd.Series(df.get("Burst_class", []))
+          .dropna().astype(str).str.strip().str.lower()
+          .unique()
+    )
+
+    examples_none, examples_sp = [], []
     for _, s in df["Filename"].dropna().items():
-        _, src = _camera_from_filename(s)
-        if src == "second-seg":
+        parts = re.split(r"[\\/]+", str(s).strip())
+        second = parts[1] if len(parts) >= 2 else ""
+        if second:
+            cand = second
+            if cand.lower() in species_set:
+                rep["species_misread"] += 1
+                if len(examples_sp) < 3: examples_sp.append(str(s))
+                continue
             rep["second_seg"] += 1
-        elif src == "regex":
-            rep["regex"] += 1
         else:
-            rep["none"] += 1
-            if len(examples) < 3:
-                examples.append(str(s))
-    rep["examples_none"] = examples
+            m = re.search(r"(?i)\b(cam\d{1,3})\b", str(s))
+            if m:
+                cand = m.group(1)
+                if cand.lower() in species_set:
+                    rep["species_misread"] += 1
+                    if len(examples_sp) < 3: examples_sp.append(str(s))
+                else:
+                    rep["regex"] += 1
+            else:
+                rep["none"] += 1
+                if len(examples_none) < 3: examples_none.append(str(s))
+
+    rep["examples_none"] = examples_none
+    rep["examples_species"] = examples_sp
     return rep
 
 def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
-    r"""
+    """
     Normalize types and create a robust 'Camera' column.
 
-    Preference order for Camera:
-      1) Label (verbatim, if present and non-empty)
-      2) existing Camera column (if present and non-empty)
-      3) Filename → second path segment; else regex r"(?i)\bcam\d{1,3}\b"; else first non-empty segment
-      4) (legacy) parse Label as a path if all else fails
+    Preference order:
+      1) existing Camera (non-empty)
+      2) Label (verbatim, non-empty)
+      3) Filename → second segment, else regex cam\d{1,3}
+      4) (legacy) parse Label as path
 
-    Adds 'Camera_source' for auditing. Drops rows with missing Camera or Date_taken.
+    Adds 'Camera_source' for auditing. Rows with missing Camera or Date_taken are dropped.
+    If a Filename-derived camera equals a species name, it's invalidated (source='species-misread').
     """
     df = df.copy()
     ensure_datetime_inplace(df, "Date_taken")
 
+    # Species set for detecting species-as-camera misreads
+    species_set = set(
+        pd.Series(df.get("Burst_class", []))
+          .dropna().astype(str).str.strip().str.lower()
+          .unique()
+    )
+
     camera = pd.Series("", index=df.index, dtype="object")
     source = pd.Series("none", index=df.index, dtype="object")
 
-    # 1) Prefer Label
-    if "Label" in df.columns:
-        lab = df["Label"].astype(str).str.strip()
-        camera = lab.where(lab.ne(""), other=camera)
-        source.loc[camera.ne("")] = "label"
-
-    # 2) Existing Camera column
+    # 1) Existing Camera
     if "Camera" in df.columns:
         cam_col = df["Camera"].astype(str).str.strip()
-        need = (camera == "") & cam_col.ne("")
-        camera.loc[need] = cam_col.loc[need]
-        source.loc[need] = "camera-col"
+        pick = cam_col.ne("")
+        camera = cam_col.where(pick, other=camera)
+        source.loc[pick] = "existing"
 
-    # 3) From Filename
+    # 2) Label (only where still empty)
+    if "Label" in df.columns:
+        lab = df["Label"].astype(str).str.strip()
+        need = (camera == "") & lab.ne("")
+        camera.loc[need] = lab.loc[need]
+        source.loc[need] = "label"
+
+    # 3) Filename → second segment / regex (only where still empty)
     if "Filename" in df.columns:
         need = (camera == "") & df["Filename"].notna()
         if need.any():
-            cams = df.loc[need, "Filename"].astype(str).apply(_camera_from_filename)
-            camera.loc[need] = cams.map(lambda x: x[0])
-            src = cams.map(lambda x: x[1])
-            source.loc[need & (source == "none")] = src
+            ex = df.loc[need, "Filename"].astype(str).apply(_camera_from_filename)
+            cam2 = ex.map(lambda x: x[0])
+            src2 = ex.map(lambda x: x[1])
+            # invalidate if matches a species name
+            mis = cam2.str.lower().isin(species_set) & src2.isin(["second-seg", "regex"])
+            # keep valid ones
+            camera.loc[need & ~mis] = cam2.loc[need & ~mis]
+            source.loc[need & ~mis]  = src2.loc[need & ~mis]
+            # mark misreads
+            source.loc[need & mis] = "species-misread"
 
-    # 4) Try Label as a path (legacy)
+    # 4) Legacy: parse Label as a path for any remaining empties
     if "Label" in df.columns:
         need = (camera == "") & df["Label"].notna()
         if need.any():
-            cams2 = df.loc[need, "Label"].astype(str).apply(_camera_from_filename)
-            camera.loc[need] = cams2.map(lambda x: x[0])
-            src2 = cams2.map(lambda x: x[1])
-            source.loc[need & (source == "none")] = src2
+            ex3 = df.loc[need, "Label"].astype(str).apply(_camera_from_filename)
+            cam3 = ex3.map(lambda x: x[0])
+            src3 = ex3.map(lambda x: x[1])
+            mis3 = cam3.str.lower().isin(species_set) & src3.isin(["second-seg", "regex"])
+            camera.loc[need & ~mis3] = cam3.loc[need & ~mis3]
+            source.loc[need & ~mis3] = src3.loc[need & ~mis3]
+            source.loc[need & mis3]  = "species-misread"
 
     df["Camera"] = camera.str.strip()
     if "Burst_class" in df.columns:
         df["Burst_class"] = df["Burst_class"].astype(str).str.strip()
 
     df["Camera_source"] = source
-    df = df[(df["Camera"] != "")].copy()  # require camera + date (date already enforced)
+    # Require a non-empty Camera
+    df = df[(df["Camera"] != "")].copy()
     return df
 
 # ---------- Binning & queries ----------
