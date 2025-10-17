@@ -59,29 +59,39 @@ class CameraTrapApp(QWidget):
         self.species_checks: list[QCheckBox] = []
         self.results_data: dict | None = None
         self._build_ui()
+        self._last_log = None  # for de-dupe
 
     # ---------- logging helpers ----------
-    def log(self, kind: str, text: str) -> None:
+
+    def _log(self, kind: str, text: str) -> None:
         style = QApplication.style()
         icon = {
-            "ok":   style.standardIcon(QStyle.SP_DialogApplyButton),
-            "warn": style.standardIcon(QStyle.SP_MessageBoxWarning),
-            "info": style.standardIcon(QStyle.SP_MessageBoxInformation),
-            "err":  style.standardIcon(QStyle.SP_MessageBoxCritical),
-            "file": style.standardIcon(QStyle.SP_DirIcon),
-            "save": style.standardIcon(QStyle.SP_DialogSaveButton),
+            "file":  style.standardIcon(QStyle.SP_DirOpenIcon),          # file/load
+            "search":style.standardIcon(QStyle.SP_FileDialogContentsView),# camera sources / analysis info
+            "ok":    style.standardIcon(QStyle.SP_DialogApplyButton),
+            "warn":  style.standardIcon(QStyle.SP_MessageBoxWarning),
+            "info":  style.standardIcon(QStyle.SP_MessageBoxInformation),
+            "err":   style.standardIcon(QStyle.SP_MessageBoxCritical),
+            "save":  style.standardIcon(QStyle.SP_DialogSaveButton),
         }.get(kind, style.standardIcon(QStyle.SP_FileIcon))
+
+        # simple de-dupe: skip if identical to previous line
+        if self._last_log == (kind, text):
+            return
+        self._last_log = (kind, text)
+
         it = QListWidgetItem(text)
         it.setIcon(icon)
         self.log_list.addItem(it)
         self.log_list.scrollToBottom()
 
-    def log_ok(self, t):   self.log("ok", t)
-    def log_info(self, t): self.log("info", t)
-    def log_warn(self, t): self.log("warn", t)
-    def log_err(self, t):  self.log("err", t)
-    def log_file(self, t): self.log("file", t)
-    def log_save(self, t): self.log("save", t)
+    def log_file(self, t):  self._log("file", t)
+    def log_search(self, t):self._log("search", t)
+    def log_ok(self, t):    self._log("ok", t)
+    def log_info(self, t):  self._log("info", t)
+    def log_warn(self, t):  self._log("warn", t)
+    def log_err(self, t):   self._log("err", t)
+    def log_save(self, t):  self._log("save", t)
 
     # ---------- UI ----------
     def _build_ui(self) -> None:
@@ -92,6 +102,9 @@ class CameraTrapApp(QWidget):
 
         # File row
         self.file_label = QLabel("No file selected")
+        self.file_label.setWordWrap(True)
+        self.file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
         layout.addWidget(self.file_label)
 
         self.browse_btn = QPushButton("Browse Excel")
@@ -136,7 +149,8 @@ class CameraTrapApp(QWidget):
 
         # Bin size
         layout.addWidget(QLabel("Select bin size:"))
-        self.bin_input = QLineEdit(placeholderText="Bin size in days (e.g. 7)")
+        self.bin_input = QLineEdit()
+        self.bin_input.setPlaceholderText("Bin size in days (e.g. 7)")
         layout.addWidget(self.bin_input)
 
         # Actions
@@ -192,7 +206,7 @@ class CameraTrapApp(QWidget):
         self.file_path = path
         try:
             species_count, sheet = self._load_species_from_file()
-            self.file_label.setText(f"📁 {path}")
+            self.file_label.setText(f"📁 {Path(path).as_posix()}")
             self.log_file(f"Selected {Path(path).name} — sheet '{sheet}' — {species_count} species")
         except Exception as e:
             self.log_err(f"Failed to inspect file: {e}")
@@ -278,11 +292,13 @@ class CameraTrapApp(QWidget):
             if (not diag["used_camera_cols"]) and diag["n_with_second_seg"] > 0 and diag["ratio"] >= 0.5:
                 sample = ", ".join(diag["sample_matches"])
                 self.log_warn(
-                    "‘Filename’ second folder looks like SPECIES (not cameras). Re-export with "
-                    "“Retain subfolders” so camera folders are preserved (e.g., images/Cam02/IMG_0001.JPG). "
+                    "The second path segment in 'Filename' looks like species names, not camera IDs. "
+                    "Please re-export from CamTrapNZ with 'Retain subfolders' enabled so camera folders are preserved "
+                    "(e.g., images/Cam02/IMG_0001.JPG). "
                     f"Matches: {diag['n_seg_matching_species']}/{diag['n_with_second_seg']} "
                     f"({diag['ratio']:.0%})" + (f"; examples: {sample}" if sample else "")
                 )
+
             elif (not diag["used_camera_cols"]) and diag["n_with_filename"] > 0 and diag["n_with_second_seg"] == 0:
                 self.log_warn(
                     "No subfolders detected in ‘Filename’ (no second path segment). "
@@ -305,6 +321,37 @@ class CameraTrapApp(QWidget):
         self.selected_sheet = sheet_to_use
         self._update_select_all()
         return len(unique_species), sheet_to_use
+    
+    def _log_from_emoji(self, raw: str) -> None:
+        """Route a pipeline message that starts with an emoji to the right icon."""
+        msg = str(raw).strip()
+        kind = "info"
+        # map leading markers to kinds and strip the marker
+        if msg.startswith("📥"):
+            kind, msg = "file", msg[1:].strip()
+        elif msg.startswith("🔎"):
+            kind, msg = "search", msg[1:].strip()
+        elif msg.startswith("⚠️"):
+            # some emoji are two code points; slice conservatively
+            kind, msg = "warn", msg.lstrip("⚠️ ").strip()
+        elif msg.startswith("ℹ️"):
+            kind, msg = "info", msg.lstrip("ℹ️ ").strip()
+        elif msg.startswith("✅"):
+            kind, msg = "ok", msg[1:].strip()
+        elif msg.startswith("❌"):
+            kind, msg = "err", msg[1:].strip()
+        elif msg.startswith("💾"):
+            kind, msg = "save", msg[1:].strip()
+
+        {
+            "file":  self.log_file,
+            "search":self.log_search,
+            "ok":    self.log_ok,
+            "warn":  self.log_warn,
+            "info":  self.log_info,
+            "err":   self.log_err,
+            "save":  self.log_save,
+        }.get(kind, self.log_info)(msg)
 
     # ---------- Pipeline ----------
     def run_analysis(self) -> None:
@@ -325,12 +372,15 @@ class CameraTrapApp(QWidget):
         results, messages = run_pipeline(
             self.file_path, selected_species=selected or None, bin_days=bin_days, sheet_name=sheet
         )
+
+        # if results is None:
         if results is None:
             for msg in messages:
                 self._log_from_emoji(msg)
             self.export_btn.setEnabled(False)
             return
 
+        # else (results present):
         for msg in messages:
             self._log_from_emoji(msg)
 
@@ -340,15 +390,6 @@ class CameraTrapApp(QWidget):
         n_tr  = len(results["trap_rates"])
         self.log_ok(f"Analysis complete — cameras: {n_cam}, detections: {n_ind} (indep), trap-rate species: {n_tr}")
         self.export_btn.setEnabled(True)
-
-    def _log_from_emoji(self, msg: str) -> None:
-        k = "info"
-        if msg.startswith("✅"): k = "ok"
-        elif msg.startswith("⚠️"): k = "warn"
-        elif msg.startswith("❌"): k = "err"
-        elif msg.startswith("📁"): k = "file"
-        elif msg.startswith("💾"): k = "save"
-        self.log(k, msg.lstrip("✅⚠️❌📁💾 ").strip())
 
     # ---------- Export ----------
     def export_results_clicked(self) -> None:
