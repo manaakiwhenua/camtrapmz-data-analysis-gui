@@ -20,22 +20,23 @@ The app streamlines a standard analysis workflow for CamTrapNZ projects:
 This preserves the folder names (camera IDs) in your `Filename` column so that  
 the Analyzer can infer camera names like **Cam01**, **Camera12**, etc.
 
-Example export structure:
+Example input structure for CamTrapNZ:
 
+```text
 images/
 ├── Cam01/
 │ ├── IMG_0001.JPG
 │ ├── IMG_0002.JPG
 ├── Cam02/
 │ └── IMG_0500.JPG
-
+```
 
 Then, in Excel, your `Filename` column will contain values like:
 
-images/Cam01/IMG_0001.JPG
+images/Cam01/IMG_0001.JPG  
 images\Cam02\IMG_0500.JPG
 
-🧠 **Priority for Camera ID detection**
+### 🧠 Priority for Camera ID detection
 
 The Analyzer determines the “Camera” column automatically in this order:
 1. Existing `Camera` column (if non-empty)  
@@ -44,6 +45,26 @@ The Analyzer determines the “Camera” column automatically in this order:
 4. Fallback regex (e.g., finds “cam12” in the text)
 
 If all methods fail, the Analyzer will **warn you before continuing**.
+
+---
+
+## 🪟 Download for Windows (End Users)
+
+- Download **`CamTrapNZAnalyzer.exe`** from the project’s Releases page.
+- Place it anywhere (Desktop or Documents).
+- Double-click to open — **no installation required**.
+
+### System Requirements
+- Windows 10 or 11  
+- No admin rights or Python installation needed
+
+### First Run
+SmartScreen may warn about an unknown publisher:  
+→ Click “More info” → “Run anyway” (app runs fully offline).
+
+### Update or Remove
+- To update: download and replace the `.exe` file  
+- To remove: delete the `.exe` and any exported results
 
 ---
 
@@ -85,26 +106,6 @@ The chart on `CameraTrapRates` shows bars at `Rate_per100CamDays` with error bar
 
 ---
 
-## 🪟 Download for Windows (End Users)
-
-- Download **`CamTrapNZAnalyzer.exe`** from the project’s Releases page.
-- Place it anywhere (Desktop or Documents).
-- Double-click to open — **no installation required**.
-
-### System Requirements
-- Windows 10 or 11  
-- No admin rights or Python installation needed
-
-### First Run
-SmartScreen may warn about an unknown publisher:  
-→ Click “More info” → “Run anyway” (app runs fully offline).
-
-### Update or Remove
-- To update: download and replace the `.exe` file  
-- To remove: delete the `.exe` and any exported results
-
----
-
 ## 🧰 Developer Install
 
 ```bash
@@ -124,7 +125,7 @@ Builds must be made on Windows (PyInstaller can’t cross‑compile from macOS/L
 
 2) Build
 - One‑file, windowed GUI:
-  - `python -m PyInstaller --onefile --windowed app\src\gui.py --name CamTrapNZAnalyzer --clean --collect-all PyQt5 --collect-all pandas --collect-submodules openpyxl --collect-submodules xlsxwriter`
+  - `python -m PyInstaller app\src\gui.py --name CamTrapNZAnalyzer --onefile --windowed --clean --hidden-import PyQt5.sip --collect-submodules openpyxl --collect-submodules xlsxwriter --exclude-module PyQt5.QtWebEngineWidgets --exclude-module PyQt5.QtWebEngineCore --exclude-module PyQt5.QtWebChannel --exclude-module PyQt5.QtWebSockets  --exclude-module PyQt5.QtMultimedia --exclude-module PyQt5.QtNetwork --exclude-module pandas.tests`
 - Output: `dist\CamTrapNZ.exe`
 
 Notes
