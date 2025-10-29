@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox,
     QScrollArea, QInputDialog, QTextBrowser, QDialog, QSizePolicy,
-    QListWidget, QListWidgetItem, QStyle
+    QListWidget, QListWidgetItem, QStyle, QMessageBox
 )
 from PyQt5.QtCore import Qt
 from app.src.main import run_pipeline, export_results
@@ -49,6 +49,7 @@ def detect_species_as_camera(df: pd.DataFrame, species: list[str]) -> dict:
     out["ratio"] = out["n_seg_matching_species"] / len(seg_norm)
     out["sample_matches"] = segs[mask].unique().tolist()[:5]
     return out
+
 # -------------------------------------------------
 
 class CameraTrapApp(QWidget):
@@ -60,6 +61,8 @@ class CameraTrapApp(QWidget):
         self.results_data: dict | None = None
         self._build_ui()
         self._last_log = None  # for de-dupe
+        self.results_dirty: bool = False
+        self.last_export_path: str | None = None
 
     # ---------- logging helpers ----------
 
@@ -353,6 +356,49 @@ class CameraTrapApp(QWidget):
             "save":  self.log_save,
         }.get(kind, self.log_info)(msg)
 
+    def closeEvent(self, event):
+        """Handle app close — confirm and offer to save if needed."""
+        # Case 1: There are unsaved results
+        if getattr(self, "results_dirty", False):
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Unsaved Analysis Results")
+            box.setText("You have analysis results that haven’t been exported.")
+            box.setInformativeText("Do you want to save before closing?")
+            save_btn    = box.addButton("Save && Close", QMessageBox.AcceptRole)
+            discard_btn = box.addButton("Close without saving", QMessageBox.DestructiveRole)
+            cancel_btn  = box.addButton("Cancel", QMessageBox.RejectRole)
+            box.setDefaultButton(save_btn)
+            box.exec_()
+
+            clicked = box.clickedButton()
+            if clicked is save_btn:
+                self.export_results_clicked()
+                if getattr(self, "results_dirty", False):  # user cancelled export
+                    event.ignore()
+                    return
+                event.accept()
+            elif clicked is discard_btn:
+                event.accept()
+            else:
+                event.ignore()
+            return
+
+        # Case 2: Results are already saved or no analysis done yet
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Close CamTrapNZ Analyzer")
+        box.setText("All results are saved. Do you want to close the app?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.Yes)
+        result = box.exec_()
+
+        if result == QMessageBox.Yes:
+            self.log_info("App closed.")  # optional: log exit
+            event.accept()
+        else:
+            event.ignore()
+
     # ---------- Pipeline ----------
     def run_analysis(self) -> None:
         if not self.file_path:
@@ -390,6 +436,8 @@ class CameraTrapApp(QWidget):
         n_tr  = len(results["trap_rates"])
         self.log_ok(f"Analysis complete — cameras: {n_cam}, detections: {n_ind} (indep), trap-rate species: {n_tr}")
         self.export_btn.setEnabled(True)
+        self.results_dirty = True
+        self.last_export_path = None
 
     # ---------- Export ----------
     def export_results_clicked(self) -> None:
@@ -413,6 +461,8 @@ class CameraTrapApp(QWidget):
             self.log_err("Export failed (see console).")
             return
         self.log_save(f"Saved: {out_path} (chart in 'CameraTrapRates')")
+        self.results_dirty = False
+        self.last_export_path = out_path
 
 # ---------- entry ----------
 def launch_gui():
