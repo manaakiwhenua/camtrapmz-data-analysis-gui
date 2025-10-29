@@ -11,6 +11,8 @@ The app streamlines a standard analysis workflow for CamTrapNZ projects:
 - Compute **trap rates per 100 camera‑days** with **95% CIs (Wilson method)**.
 - Visualise rates with error bars and export tidy Excel tables.
 
+---
+
 ## 🧩 Input Data Requirements
 
 ### ✅ Export correctly from CamTrapNZ
