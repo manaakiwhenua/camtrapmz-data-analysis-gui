@@ -15,14 +15,14 @@ The app streamlines a standard analysis workflow for CamTrapNZ projects:
 
 ## 🧩 Input Data Requirements
 
-### ✅ Export correctly from CamTrapNZ
+### ✅ What the Analyzer needs
 
-**You must enable “Retain subfolders” when exporting.**
+The Excel export fed into this tool must have a `Filename` column where each entry makes the camera ID or name obvious. As long as the identifier is present somewhere in that string, the Analyzer can infer the camera. Common ways this happens in CamTrapNZ exports:
 
-This preserves the folder names (camera IDs) in your `Filename` column so that  
-the Analyzer can infer camera names like **Cam01**, **Camera12**, etc.
+1. **Camera IDs inside filenames** — your images already use names such as `Cam02_IMG_0001.JPG`, so the camera identifier is embedded in each filename.
+2. **Camera-specific folders** — your images are organised into folders like `Cam01/IMG_0001.JPG`. When CamTrapNZ builds the Excel export, the folder name becomes part of the `Filename` path and therefore carries the camera identifier.
 
-Example input structure for CamTrapNZ:
+Example structure (folder-per-camera):
 
 ```text
 images/
@@ -33,18 +33,17 @@ images/
 │ └── IMG_0500.JPG
 ```
 
-Then, in Excel, your `Filename` column will contain values like:
-
-images/Cam01/IMG_0001.JPG  
-images\Cam02\IMG_0500.JPG
+Regardless of layout, the Excel export should show the camera identifier in each `Filename`, for example:
+- `images/Cam01/IMG_0001.JPG` when folders are preserved
+- `images/Hedgehog/Cam02_IMG_0001.JPG` when filenames carry the `Cam02` prefix
 
 ### 🧠 Priority for Camera ID detection
 
 The Analyzer determines the “Camera” column automatically in this order:
 1. Existing `Camera` column (if non-empty)  
 2. `Label` column (verbatim)  
-3. From `Filename` — second path segment (e.g., `images/Cam02/...`)  
-4. Fallback regex (e.g., finds “cam12” in the text)
+3. From `Filename` — camera folder (2nd segment) or any embedded prefix (e.g., `Cam02_IMG_0001.JPG`)  
+4. Fallback regex (e.g., finds “cam12” elsewhere in the text)
 
 If all methods fail, the Analyzer will **warn you before continuing**.
 

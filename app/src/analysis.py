@@ -48,12 +48,12 @@ def ensure_datetime_inplace(df: pd.DataFrame, column: str = "Date_taken") -> pd.
 
 # ---------- Camera extraction helpers ----------
 
-_CAM_RE_NUM = re.compile(r'(?i)\bcam(?:era)?\s*0*([0-9]+)\b')
+_CAM_RE_NUM = re.compile(r'(?i)(?<![0-9A-Za-z])cam(?:era)?[\s_-]*0*([0-9]+)(?=$|[^0-9A-Za-z])')
 
 def _camera_num(name: str) -> int:
     """
     Extract an integer camera ID from strings like:
-      'Cam8', 'Cam08', 'Cam 8', 'Camera12', 'Cam11 Dec21 to May22'
+      'Cam8', 'Cam08', 'Cam 8', 'Cam_8', 'Camera12', 'Camera_12', 'Cam11 Dec21 to May22'
     Returns +inf if no number is found so those sort last.
     """
     m = _CAM_RE_NUM.search(str(name))
@@ -86,17 +86,31 @@ def _dedupe_camera_and_label(df: pd.DataFrame, keep_original_label: bool = False
 
     return df.drop(columns=["Label"])
 
-_CAM_FALLBACK_RE = re.compile(r"(?i)\b(cam\d{1,3})\b")
+_CAM_FALLBACK_RE = re.compile(r"(?i)(?<![0-9A-Za-z])(cam(?:era)?[\s_-]*0*[0-9]+)(?=$|[^0-9A-Za-z])")
+
+def _looks_like_camera_label(text: str) -> bool:
+    """Heuristic: label either starts with 'cam' or contains digits (common for camera IDs)."""
+    t = str(text).strip().lower()
+    return bool(t) and (t.startswith("cam") or re.search(r"\d", t) is not None)
 
 def _camera_from_filename(path: str) -> tuple[str, str]:
     """
     Return (camera, source) where source ∈ {'second-seg','regex','none'}.
     (Species-misread handled in normalize_raw; this function only extracts.)
     """
-    parts = re.split(r"[\\/]+", str(path).strip())
-    if len(parts) >= 2 and parts[1]:
-        return parts[1], "second-seg"
-    m = re.search(r"(?i)\b(cam\d{1,3})\b", str(path))
+    s = str(path).strip()
+    parts = [p for p in re.split(r"[\\/]+", s) if p]
+    second = parts[1] if len(parts) >= 2 else ""
+
+    if second:
+        if _looks_like_camera_label(second):
+            return second, "second-seg"
+        m = _CAM_FALLBACK_RE.search(s)
+        if m:
+            return m.group(1), "regex"
+        return second, "second-seg"
+
+    m = _CAM_FALLBACK_RE.search(s)
     if m:
         return m.group(1), "regex"
     return "", "none"
@@ -122,28 +136,24 @@ def camera_extraction_report(df: pd.DataFrame) -> dict:
     )
 
     examples_none, examples_sp = [], []
-    for _, s in df["Filename"].dropna().items():
-        parts = re.split(r"[\\/]+", str(s).strip())
-        second = parts[1] if len(parts) >= 2 else ""
-        if second:
-            cand = second
-            if cand.lower() in species_set:
+    for _, raw in df["Filename"].dropna().items():
+        cam, src = _camera_from_filename(raw)
+        cam = cam.strip()
+        if cam:
+            if cam.lower() in species_set and src in {"second-seg", "regex"}:
                 rep["species_misread"] += 1
-                if len(examples_sp) < 3: examples_sp.append(str(s))
+                if len(examples_sp) < 3: examples_sp.append(str(raw))
                 continue
-            rep["second_seg"] += 1
-        else:
-            m = re.search(r"(?i)\b(cam\d{1,3})\b", str(s))
-            if m:
-                cand = m.group(1)
-                if cand.lower() in species_set:
-                    rep["species_misread"] += 1
-                    if len(examples_sp) < 3: examples_sp.append(str(s))
-                else:
-                    rep["regex"] += 1
+            if src == "second-seg":
+                rep["second_seg"] += 1
+            elif src == "regex":
+                rep["regex"] += 1
             else:
                 rep["none"] += 1
-                if len(examples_none) < 3: examples_none.append(str(s))
+                if len(examples_none) < 3: examples_none.append(str(raw))
+        else:
+            rep["none"] += 1
+            if len(examples_none) < 3: examples_none.append(str(raw))
 
     rep["examples_none"] = examples_none
     rep["examples_species"] = examples_sp
@@ -156,7 +166,7 @@ def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
     Preference order:
       1) existing Camera (non-empty)
       2) Label (verbatim, non-empty)
-      3) Filename → second segment, else regex cam\d{1,3}
+      3) Filename → camera folder (2nd path segment) or prefixed CamXX token
       4) (legacy) parse Label as path
 
     Adds 'Camera_source' for auditing. Rows with missing Camera or Date_taken are dropped.

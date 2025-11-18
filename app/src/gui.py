@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from app.src.main import run_pipeline, export_results
+from app.src.analysis import _camera_from_filename
 
 README_URL = "https://github.com/manaakiwhenua/camtrapnz-data-analysis-gui"
 
@@ -28,8 +29,13 @@ def _normalize_token(s: str) -> str:
 def detect_species_as_camera(df: pd.DataFrame, species: list[str]) -> dict:
     out = {
         "used_camera_cols": ("Camera" in df.columns) or ("Label" in df.columns),
-        "n_with_filename": 0, "n_with_second_seg": 0,
-        "n_seg_matching_species": 0, "ratio": 0.0, "sample_matches": [],
+        "n_with_filename": 0,
+        "n_with_second_seg": 0,
+        "n_seg_matching_species": 0,
+        "ratio": 0.0,
+        "sample_matches": [],
+        "n_with_camera": 0,
+        "n_species_seg_with_camera": 0,
     }
     if "Filename" not in df.columns or df.empty:
         return out
@@ -38,16 +44,32 @@ def detect_species_as_camera(df: pd.DataFrame, species: list[str]) -> dict:
     fn = pd.Series(df["Filename"]).dropna().astype(str)
     out["n_with_filename"] = len(fn)
 
-    segs = fn.map(_second_segment).dropna()
-    out["n_with_second_seg"] = len(segs)
-    if len(segs) == 0:
-        return out
+    segs = fn.map(_second_segment)
+    out["n_with_second_seg"] = int(segs.dropna().shape[0])
 
-    seg_norm = segs.map(_normalize_token)
-    mask = seg_norm.isin(species_norm)
-    out["n_seg_matching_species"] = int(mask.sum())
-    out["ratio"] = out["n_seg_matching_species"] / len(seg_norm)
-    out["sample_matches"] = segs[mask].unique().tolist()[:5]
+    def _is_species(seg: str | None) -> bool:
+        if not isinstance(seg, str):
+            return False
+        seg = seg.strip()
+        if not seg:
+            return False
+        return _normalize_token(seg) in species_norm
+
+    species_mask = segs.map(_is_species)
+    out["n_seg_matching_species"] = int(species_mask.sum())
+    if out["n_with_second_seg"]:
+        out["ratio"] = out["n_seg_matching_species"] / out["n_with_second_seg"]
+    out["sample_matches"] = segs[species_mask].dropna().astype(str).unique().tolist()[:5]
+
+    cam_src = fn.map(_camera_from_filename)
+    if len(cam_src):
+        cam_df = pd.DataFrame(cam_src.tolist(), index=fn.index, columns=["camera", "source"])
+        cam_vals = cam_df["camera"].astype(str).str.strip()
+        valid = cam_vals.ne("")
+        out["n_with_camera"] = int(valid.sum())
+        species_mask = species_mask.reindex(fn.index, fill_value=False)
+        out["n_species_seg_with_camera"] = int((species_mask & valid).sum())
+
     return out
 
 # -------------------------------------------------
@@ -120,8 +142,9 @@ class CameraTrapApp(QWidget):
 
         # Tip (wrapped)
         self.hint = QLabel(
-            "Tip: Arrange images into separate camera folders and export from CamTrapNZ with "
-            "“Retain subfolders” ON\nso Filename looks like images/Cam02/IMG_0001.JPG."
+            "Tip: The Analyzer only needs camera IDs or names to appear somewhere in the `Filename` column of the "
+            "CamTrapNZ export (e.g., paths like Cam02/IMG_0001.JPG or filenames like Cam02_IMG_0001.JPG). "
+            "As long as each camera is identifiable in `Filename`, you’re good to go."
         )
         self.hint.setWordWrap(True)
         self.hint.setAlignment(Qt.AlignLeft | Qt.AlignTop)
@@ -181,9 +204,12 @@ class CameraTrapApp(QWidget):
         lay = QVBoxLayout(dlg)
         html = f"""
         <h3>CamTrapNZ Analyzer – Help</h3>
-        <p>Place images in separate camera folders and export from CamTrapNZ with
-        <b>“Retain subfolders”</b> enabled so the camera folder appears in <code>Filename</code>.</p>
-        <p>Full instructions and screenshots in the
+        <p>The Analyzer only needs each camera ID or name to be visible somewhere in the <code>Filename</code> column of your CamTrapNZ export.</p>
+        <ul>
+        <li>Many projects organise photos in folders like <code>Cam01/IMG_0001.JPG</code>. Those folder names flow through to <code>Filename</code> (either as the second path segment or as a prefix added by CamTrapNZ) and are detected automatically.</li>
+        <li>If your workflow already embeds the camera ID directly in the image name (e.g., <code>Cam02_IMG_0001.JPG</code>), that’s equally valid — the Analyzer simply scans the text for camera tokens.</li>
+        </ul>
+        <p>Full instructions and screenshots are available in the
         <a href="{README_URL}">README</a>.</p>
         <hr>
         <p><b>Binning:</b> weeks are left-closed, right-open [start, end);
@@ -292,21 +318,45 @@ class CameraTrapApp(QWidget):
         # preflight: species-as-camera detection
         try:
             diag = detect_species_as_camera(df, unique_species)
-            if (not diag["used_camera_cols"]) and diag["n_with_second_seg"] > 0 and diag["ratio"] >= 0.5:
-                sample = ", ".join(diag["sample_matches"])
-                self.log_warn(
-                    "The second path segment in 'Filename' looks like species names, not camera IDs. "
-                    "Please re-export from CamTrapNZ with 'Retain subfolders' enabled so camera folders are preserved "
-                    "(e.g., images/Cam02/IMG_0001.JPG). "
-                    f"Matches: {diag['n_seg_matching_species']}/{diag['n_with_second_seg']} "
-                    f"({diag['ratio']:.0%})" + (f"; examples: {sample}" if sample else "")
-                )
+            needs_camera_col = not diag["used_camera_cols"]
+            species_heavy = diag["n_with_second_seg"] > 0 and diag["ratio"] >= 0.5
+            sample = ", ".join(diag["sample_matches"])
 
-            elif (not diag["used_camera_cols"]) and diag["n_with_filename"] > 0 and diag["n_with_second_seg"] == 0:
-                self.log_warn(
-                    "No subfolders detected in ‘Filename’ (no second path segment). "
-                    "Please re-export with “Retain subfolders”."
-                )
+            if needs_camera_col and diag["n_with_camera"] == 0:
+                if diag["n_with_filename"] > 0 and diag["n_with_second_seg"] == 0:
+                    self.log_warn(
+                        "No subfolders detected in ‘Filename’ (no second path segment). "
+                        "Please re-export with “Retain subfolders”."
+                    )
+                elif species_heavy:
+                    self.log_warn(
+                        "The second path segment in 'Filename' looks like species names, not camera IDs. "
+                        "Please re-export from CamTrapNZ with 'Retain subfolders' enabled so camera folders are preserved "
+                        "(e.g., images/Cam02/IMG_0001.JPG). "
+                        f"Matches: {diag['n_seg_matching_species']}/{diag['n_with_second_seg']} "
+                        f"({diag['ratio']:.0%})" + (f"; examples: {sample}" if sample else "")
+                    )
+                else:
+                    self.log_warn(
+                        "Cameras could not be inferred from the data. "
+                        "Please add a 'Camera' column or re-export with camera folders retained."
+                    )
+            elif needs_camera_col and species_heavy:
+                missing = diag["n_seg_matching_species"] - diag["n_species_seg_with_camera"]
+                if missing > 0:
+                    self.log_warn(
+                        "Most 'Filename' folders look like species names. "
+                        f"Camera IDs were recovered for {diag['n_species_seg_with_camera']} rows via filename prefixes, "
+                        f"but {missing} rows still lack cameras. Consider re-exporting with 'Retain subfolders'."
+                    )
+                else:
+                    chunks = [
+                        "‘Filename’ second segments match species names.",
+                        "Camera IDs were recovered elsewhere in the filename (e.g., Cam01_...).",
+                        "Continuing with those inferred camera IDs."
+                    ]
+                    for part in chunks:
+                        self.log_info(part)
         except Exception:
             pass  # advisory only
 
