@@ -126,7 +126,24 @@ Builds must be made on Windows (PyInstaller can’t cross‑compile from macOS/L
 
 2) Build
 - One‑file, windowed GUI:
-  - `python -m PyInstaller app\src\gui.py --name CamTrapNZAnalyzer --onefile --windowed --clean --hidden-import PyQt5.sip --collect-submodules openpyxl --collect-submodules xlsxwriter --exclude-module PyQt5.QtWebEngineWidgets --exclude-module PyQt5.QtWebEngineCore --exclude-module PyQt5.QtWebChannel --exclude-module PyQt5.QtWebSockets  --exclude-module PyQt5.QtMultimedia --exclude-module PyQt5.QtNetwork --exclude-module pandas.tests`
+  ```powershell
+  python -m PyInstaller `
+    app\src\gui.py `
+    --name CamTrapNZAnalyzer `
+    --onefile `
+    --windowed `
+    --clean `
+    --hidden-import PyQt5.sip `
+    --collect-submodules openpyxl `
+    --collect-submodules xlsxwriter `
+    --exclude-module PyQt5.QtWebEngineWidgets `
+    --exclude-module PyQt5.QtWebEngineCore `
+    --exclude-module PyQt5.QtWebChannel `
+    --exclude-module PyQt5.QtWebSockets `
+    --exclude-module PyQt5.QtMultimedia `
+    --exclude-module PyQt5.QtNetwork `
+    --exclude-module pandas.tests
+  ```
 - Output: `dist\CamTrapNZ.exe`
 
 Notes
