@@ -350,40 +350,53 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
                          species_col: str = "Burst_class",
                          count_col: str = "Count",
                          z: float = 1.96) -> pd.DataFrame:
-    """Trap rates per 100 camera-days using Wilson CI on p = count / total_days.
-    Args:
-        summary_df (DataFrame): DataFrame summarizing camera dates with columns ["Camera", 
-            "FirstPhoto", "LastPhoto", "NumberOfDays"]
-        detections_df (DataFrame): DataFrame containing independent detections with columns
-            ["Camera", species_col, "Date_taken", (optional) count_col]
-        species_col (str): column name for species in detections_df
-        count_col (str): column name for count of detections in detections_df; if absent,
-            each row counts as 1
-        z (float): z-score for confidence interval (1.96 for 95% CI)
-    Returns:
-        DataFrame: DataFrame with columns ["Species", "Rate_per100CamDays", "Lower95CI",
-            "Upper95CI", "MinusBar", "PlusBar"]
-    """
-    total_days = float(pd.to_numeric(summary_df["NumberOfDays"], errors="coerce").fillna(0).sum())
+    """Trap rates per 100 camera-days using Wilson CI on p = count / total_days."""
+    # 1) Total effort
+    total_days = float(
+        pd.to_numeric(summary_df["NumberOfDays"], errors="coerce")
+        .fillna(0)
+        .sum()
+    )
     if total_days <= 0:
         raise ValueError("Total effort is zero; check NumberOfDays in summary_df.")
 
+    # 2) Counts per species
     det = detections_df.copy()
     if count_col not in det.columns:
         det[count_col] = 1
-    det[count_col] = pd.to_numeric(det[count_col], errors="coerce").fillna(1).astype(int)
+    det[count_col] = (
+        pd.to_numeric(det[count_col], errors="coerce")
+        .fillna(1)
+        .astype(int)
+    )
 
     counts = det.groupby(species_col, dropna=False, observed=True)[count_col].sum()
 
-    rows = []
+    rows: list[list] = []
+
     for species, k in counts.items():
-        p = k / total_days
-        denom  = 1.0 + (z**2) / total_days
-        center = p + (z**2) / (2.0 * total_days)
-        margin = z * math.sqrt(p*(1.0 - p)/total_days + (z**2)/(4.0 * total_days**2))
+        # raw proportion
+        p_raw = k / total_days
+
+        # Guard against NaN / inf and keep proportion inside [0, 1]
+        if not math.isfinite(p_raw):
+            continue
+        p = min(max(p_raw, 0.0), 1.0)
+
+        # Wilson CI
+        denom  = 1.0 + (z ** 2) / total_days
+        center = p + (z ** 2) / (2.0 * total_days)
+
+        radicand = p * (1.0 - p) / total_days + (z ** 2) / (4.0 * total_days ** 2)
+        # Numerical safety: expression *should* be ≥ 0, but clamp just in case
+        if radicand < 0:
+            radicand = 0.0
+
+        margin = z * math.sqrt(radicand)
         lower  = (center - margin) / denom
         upper  = (center + margin) / denom
 
+        # Convert to trap rates per 100 cam-days
         rate100 = p * 100.0
         lo100   = lower * 100.0
         up100   = upper * 100.0
@@ -393,14 +406,20 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
             round(rate100, 2),
             round(lo100, 2),
             round(up100, 2),
-            round(rate100 - lo100, 2),
-            round(up100 - rate100, 2),
+            round(rate100 - lo100, 2),   # MinusBar
+            round(up100 - rate100, 2),   # PlusBar
         ])
 
-    out = pd.DataFrame(rows, columns=[
-        "Species","Rate_per100CamDays","Lower95CI","Upper95CI","MinusBar","PlusBar"
-    ])
-    out.sort_values(["Rate_per100CamDays","Species"], ascending=[False, True], inplace=True, ignore_index=True)
+    out = pd.DataFrame(
+        rows,
+        columns=["Species", "Rate_per100CamDays", "Lower95CI", "Upper95CI", "MinusBar", "PlusBar"],
+    )
+    out.sort_values(
+        ["Rate_per100CamDays", "Species"],
+        ascending=[False, True],
+        inplace=True,
+        ignore_index=True,
+    )
     return out
 
 # ---------- 4) Detection histories ----------
