@@ -24,3 +24,6 @@ build-backend = "poetry.core.masonry.api"
 camtrapnzanalyzer = "app.src.gui:launch_gui"
 [tool.poetry.group.dev.dependencies]
 pyinstaller = "^6.15.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
