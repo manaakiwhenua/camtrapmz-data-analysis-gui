@@ -3,6 +3,13 @@ from datetime import datetime
 import pandas as pd
 from app.src.analysis import summarise_camera_dates
 
+EXCLUDED_SPECIES = {s.lower() for s in ("Other animal", "Not classified", "Empty")}
+
+def test_excluded_species_case_insensitive():
+    s = pd.Series(["Empty", "empty", "EMPTY", "Cat"])
+    out = s[~s.str.lower().isin(EXCLUDED_SPECIES)]
+    assert list(out) == ["Cat"]
+
 def test_summarise_camera_dates(simple_df):
     out = summarise_camera_dates(simple_df)
 

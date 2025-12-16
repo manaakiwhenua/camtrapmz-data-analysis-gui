@@ -6,9 +6,9 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QFileDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QCheckBox,
     QScrollArea, QInputDialog, QTextBrowser, QDialog, QSizePolicy,
-    QListWidget, QListWidgetItem, QStyle, QMessageBox
+    QListWidget, QListWidgetItem, QStyle, QMessageBox, QFrame
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
 from app.src.main import run_pipeline, export_results
 from app.src.analysis import _camera_from_filename
 
@@ -40,7 +40,7 @@ def detect_species_as_camera(df: pd.DataFrame, species: list[str]) -> dict:
     if "Filename" not in df.columns or df.empty:
         return out
 
-    species_norm = { _normalize_token(s) for s in species if isinstance(s, str) and s.strip() }
+    species_norm = {_normalize_token(s) for s in species if isinstance(s, str) and s.strip()}
     fn = pd.Series(df["Filename"]).dropna().astype(str)
     out["n_with_filename"] = len(fn)
 
@@ -80,19 +80,24 @@ class CameraTrapApp(QWidget):
         self.file_path: str | None = None
         self.selected_sheet: str | None = None
         self.species_checks: list[QCheckBox] = []
+        self.species_col: str | None = None
         self.results_data: dict | None = None
         self._build_ui()
         self._last_log = None  # for de-dupe
         self.results_dirty: bool = False
         self.last_export_path: str | None = None
 
+        # NEW: block running when user cancels on empty Verified_class
+        self.requires_verified: bool = False
+        self.species_source: str | None = None  # "verified" or "burst"
+
     # ---------- logging helpers ----------
 
     def _log(self, kind: str, text: str) -> None:
         style = QApplication.style()
         icon = {
-            "file":  style.standardIcon(QStyle.SP_DirOpenIcon),          # file/load
-            "search":style.standardIcon(QStyle.SP_FileDialogContentsView),# camera sources / analysis info
+            "file":  style.standardIcon(QStyle.SP_DirOpenIcon),
+            "search":style.standardIcon(QStyle.SP_FileDialogContentsView),
             "ok":    style.standardIcon(QStyle.SP_DialogApplyButton),
             "warn":  style.standardIcon(QStyle.SP_MessageBoxWarning),
             "info":  style.standardIcon(QStyle.SP_MessageBoxInformation),
@@ -100,7 +105,6 @@ class CameraTrapApp(QWidget):
             "save":  style.standardIcon(QStyle.SP_DialogSaveButton),
         }.get(kind, style.standardIcon(QStyle.SP_FileIcon))
 
-        # simple de-dupe: skip if identical to previous line
         if self._last_log == (kind, text):
             return
         self._last_log = (kind, text)
@@ -118,6 +122,23 @@ class CameraTrapApp(QWidget):
     def log_err(self, t):   self._log("err", t)
     def log_save(self, t):  self._log("save", t)
 
+    def log_separator(self) -> None:
+        """Visual separator between log sessions (auto-stretches with the window)."""
+        item = QListWidgetItem()
+        item.setFlags(Qt.NoItemFlags)  # not selectable/clickable
+        item.setSizeHint(QSize(0, 12)) # controls separator height
+
+        line = QFrame(self.log_list)
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("color:#cfcfcf;")  # subtle line; optional
+
+        self.log_list.addItem(item)
+        self.log_list.setItemWidget(item, line)
+        self.log_list.scrollToBottom()
+
+        self._last_log = None  # reset de-dupe boundary
+
     # ---------- UI ----------
     def _build_ui(self) -> None:
         self.setWindowTitle("CamTrapNZ Analyzer")
@@ -125,11 +146,9 @@ class CameraTrapApp(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # File row
         self.file_label = QLabel("No file selected")
         self.file_label.setWordWrap(True)
         self.file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-
         layout.addWidget(self.file_label)
 
         self.browse_btn = QPushButton("Browse Excel")
@@ -140,7 +159,6 @@ class CameraTrapApp(QWidget):
         header_row.addWidget(self.help_btn)
         layout.addLayout(header_row)
 
-        # Tip (wrapped)
         self.hint = QLabel(
             "Tip: The Analyzer only needs camera IDs or names to appear somewhere in the `Filename` column of the "
             "CamTrapNZ export (e.g., paths like Cam02/IMG_0001.JPG or filenames like Cam02_IMG_0001.JPG). "
@@ -152,7 +170,6 @@ class CameraTrapApp(QWidget):
         self.hint.setStyleSheet("color:#666; font-style:italic; font-size:11px;")
         layout.addWidget(self.hint)
 
-        # Species list in a scroll area
         self.species_box = QVBoxLayout()
         self.species_group = QWidget()
         self.species_group.setLayout(self.species_box)
@@ -173,25 +190,21 @@ class CameraTrapApp(QWidget):
         layout.addLayout(species_hdr)
         layout.addWidget(self.scroll)
 
-        # Bin size
         layout.addWidget(QLabel("Select bin size:"))
         self.bin_input = QLineEdit()
         self.bin_input.setPlaceholderText("Bin size in days (e.g. 7)")
         layout.addWidget(self.bin_input)
 
-        # Actions
         self.run_btn = QPushButton("Run Analysis")
         self.export_btn = QPushButton("Export Results")
         self.export_btn.setEnabled(False)
         layout.addWidget(self.run_btn)
         layout.addWidget(self.export_btn)
 
-        # Log list
         self.log_list = QListWidget()
         self.log_list.setUniformItemSizes(True)
         layout.addWidget(self.log_list)
 
-        # Wiring
         self.browse_btn.clicked.connect(self._select_file)
         self.help_btn.clicked.connect(self._show_help)
         self.run_btn.clicked.connect(self.run_analysis)
@@ -232,16 +245,29 @@ class CameraTrapApp(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Open Excel File", "", "Excel Files (*.xlsx)")
         if not path:
             return
+
+        # Visual separator for a new session
+        if self.log_list.count() > 0:
+            self.log_separator()
+
+        # NEW: reset “paused” state whenever a new file is chosen
+        self.requires_verified = False
+        self.species_source = None
+        self.run_btn.setEnabled(True)
+
         self.file_path = path
         try:
             species_count, sheet = self._load_species_from_file()
             self.file_label.setText(f"📁 {Path(path).as_posix()}")
-            self.log_file(f"Selected {Path(path).name} — sheet '{sheet}' — {species_count} species")
+            # only log if we successfully produced a list
+            if species_count > 0:
+                self.log_file(f"Selected {Path(path).name} — sheet '{sheet}' — {species_count} species")
         except Exception as e:
             self.log_err(f"Failed to inspect file: {e}")
             self.file_path = None
             self.selected_sheet = None
             self.export_btn.setEnabled(False)
+            self.run_btn.setEnabled(True)
 
     def _toggle_select_all(self, state: int) -> None:
         if state == Qt.PartiallyChecked:
@@ -281,7 +307,12 @@ class CameraTrapApp(QWidget):
         if not self.file_path:
             raise ValueError("No file path set.")
 
+        # optional: separator in log when picking a new file
+        #self._log("info", " ")
+
         xls = pd.ExcelFile(self.file_path, engine="openpyxl")
+
+        # ---------- choose sheet ----------
         sheet_to_use: str | None = None
         if "Sheet1" in xls.sheet_names:
             sheet_to_use = "Sheet1"
@@ -291,10 +322,12 @@ class CameraTrapApp(QWidget):
             for name in xls.sheet_names:
                 try:
                     head = xls.parse(name, nrows=5)
-                    if "Burst_class" in head.columns:
-                        sheet_to_use = name; break
+                    if "Verified_class" in head.columns or ("Burst_class" in head.columns):
+                        sheet_to_use = name
+                        break
                 except Exception:
                     continue
+
             if sheet_to_use is None:
                 choice, ok = QInputDialog.getItem(
                     self, "Select Worksheet",
@@ -306,16 +339,82 @@ class CameraTrapApp(QWidget):
                 sheet_to_use = choice
 
         df = xls.parse(sheet_to_use)
-        if "Burst_class" not in df.columns:
-            raise ValueError(f"Required column 'Burst_class' not found in sheet '{sheet_to_use}'.")
 
-        # species list
-        unique_species = (
-            pd.Series(df["Burst_class"]).dropna().astype(str).str.strip().unique()
-        )
-        unique_species = sorted(unique_species)
+        # Both columns exist by default, but keep guardrails
+        has_v = "Verified_class" in df.columns
+        has_b = "Burst_class" in df.columns
 
-        # preflight: species-as-camera detection
+        if not has_v and not has_b:
+            raise ValueError(
+                f"Expected 'Verified_class' or 'Burst_class' not found in sheet '{sheet_to_use}'."
+            )
+
+        if not has_v and has_b:
+            # Allowed: Burst-only file
+            QMessageBox.warning(
+                self,
+                "Verified_class not found",
+                "This file has no 'Verified_class' column.\n\n"
+                "The Analyzer will use 'Burst_class' (unverified). "
+                "If you want verified results, export a verified file from CamTrapNZ."
+            )
+            self.log_warn("Verified_class column not found — using Burst_class (unverified).")
+            self.species_col = "Burst_class"
+            species_series = df["Burst_class"].fillna("").astype(str).str.strip()
+
+        elif has_v:
+            # Your existing Verified_class logic (non-empty => use it; empty => ask Cancel/Continue)
+            v = df["Verified_class"].fillna("").astype(str).str.strip()
+            if v.ne("").any():
+                self.species_col = "Verified_class"
+                species_series = v
+                self.log_info("Using Verified_class for species list.")
+            else:
+                # your existing Cancel vs Continue dialog here...
+                # NEW: Popup Cancel vs Continue
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Warning)
+                box.setWindowTitle("Verified_class is empty")
+                box.setText("This file has an empty 'Verified_class' column.")
+                box.setInformativeText(
+                    "This usually means the data has not been verified in CamTrapNZ.\n\n"
+                    "Do you want to continue using 'Burst_class' (unverified), "
+                    "or cancel and load a verified export?"
+                )
+                cont_btn = box.addButton("Continue with Burst_class (unverified)", QMessageBox.AcceptRole)
+                cancel_btn = box.addButton("Cancel (load verified file)", QMessageBox.RejectRole)
+                box.setDefaultButton(cancel_btn)
+                box.exec_()
+
+                if box.clickedButton() is cancel_btn:
+                    self.species_col = None
+                    self.requires_verified = True
+                    self.log_warn("Verified_class is empty — please export a VERIFIED file from CamTrapNZ export to continue.")
+                    # Pause here: disale actions and leave current file selected but unusable
+                    self.run_btn.setEnabled(False)
+                    self.export_btn.setEnabled(False)
+
+                    # Clear any existing species list
+                    for chk in self.species_checks:
+                        self.species_box.removeWidget(chk)
+                        chk.deleteLater()
+                    self.species_checks = []
+                    self._update_select_all()
+                    return 0, sheet_to_use
+                else:
+                    self.species_col = "Burst_class"
+                    species_series = df["Burst_class"].fillna("").astype(str).str.strip()
+                    self.log_warn("Continuing with Burst_class (unverified) as species list.")
+        else:
+            # has_v is False, has_b is True handled above, so this branch is just safety
+            self.species_col = "Burst_class"
+            species_series = df["Burst_class"].fillna("").astype(str).str.strip()
+
+        # ---------- clean species list ----------
+        species_series = species_series[(species_series != "") & (~species_series.str.lower().isin({"other animal","not classified","empty"}))]
+        unique_species = sorted(species_series.unique())
+
+        # preflight: species-as-camera detection (keep your existing logic)
         try:
             diag = detect_species_as_camera(df, unique_species)
             needs_camera_col = not diag["used_camera_cols"]
@@ -341,30 +440,15 @@ class CameraTrapApp(QWidget):
                         "Cameras could not be inferred from the data. "
                         "Please add a 'Camera' column or re-export with camera folders retained."
                     )
-            elif needs_camera_col and species_heavy:
-                missing = diag["n_seg_matching_species"] - diag["n_species_seg_with_camera"]
-                if missing > 0:
-                    self.log_warn(
-                        "Most 'Filename' folders look like species names. "
-                        f"Camera IDs were recovered for {diag['n_species_seg_with_camera']} rows via filename prefixes, "
-                        f"but {missing} rows still lack cameras. Consider re-exporting with 'Retain subfolders'."
-                    )
-                else:
-                    chunks = [
-                        "‘Filename’ second segments match species names.",
-                        "Camera IDs were recovered elsewhere in the filename (e.g., Cam01_...).",
-                        "Continuing with those inferred camera IDs."
-                    ]
-                    for part in chunks:
-                        self.log_info(part)
         except Exception:
-            pass  # advisory only
+            pass
 
         # rebuild species checkbox list
         for chk in self.species_checks:
             self.species_box.removeWidget(chk)
             chk.deleteLater()
         self.species_checks = []
+
         for sp in unique_species:
             chk = QCheckBox(sp)
             chk.stateChanged.connect(self._update_select_all)
@@ -374,7 +458,7 @@ class CameraTrapApp(QWidget):
         self.selected_sheet = sheet_to_use
         self._update_select_all()
         return len(unique_species), sheet_to_use
-    
+
     def _log_from_emoji(self, raw: str) -> None:
         """Route a pipeline message that starts with an emoji to the right icon."""
         msg = str(raw).strip()
@@ -455,6 +539,13 @@ class CameraTrapApp(QWidget):
             self.log_warn("Please select a file first.")
             return
 
+        # NEW: block running if user cancelled because Verified_class empty
+        if getattr(self, "requires_verified", False):
+            self.results_data = None
+            self.export_btn.setEnabled(False)
+            self.log_warn("Analysis paused: please load a verified CamTrapNZ export (Verified_class is empty).")
+            return
+
         bin_text = self.bin_input.text().strip()
         try:
             bin_days = int(bin_text) if bin_text else 7
@@ -465,29 +556,38 @@ class CameraTrapApp(QWidget):
         selected = [chk.text() for chk in self.species_checks if chk.isChecked()]
         sheet = getattr(self, "selected_sheet", None)
 
+        # NOTE: this assumes your pipeline still uses Burst_class internally.
+        # If you later update analysis/main to use Verified_class, pass a species_col argument instead.
         results, messages = run_pipeline(
-            self.file_path, selected_species=selected or None, bin_days=bin_days, sheet_name=sheet
+            self.file_path,
+            selected_species=selected or None,
+            bin_days=bin_days,
+            sheet_name=sheet,
+            species_col_override=self.species_col,
         )
 
-        # if results is None:
         if results is None:
             for msg in messages:
                 self._log_from_emoji(msg)
+            self.results_data = None
+            self.results_dirty = False
+            self.last_export_path = None
             self.export_btn.setEnabled(False)
             return
 
-        # else (results present):
         for msg in messages:
             self._log_from_emoji(msg)
 
         self.results_data = results
-        n_cam = len(results["summary"])
-        n_ind = len(results["independent"])
-        n_tr  = len(results["trap_rates"])
-        self.log_ok(f"Analysis complete — cameras: {n_cam}, detections: {n_ind} (indep), trap-rate species: {n_tr}")
         self.export_btn.setEnabled(True)
         self.results_dirty = True
         self.last_export_path = None
+
+        n_cam = len(results["summary"])
+        n_ind = len(results["independent"])
+        n_tr  = len(results["trap_rates"])
+        used = results.get("species_col_used", self.species_col or "unknown")
+        self.log_ok(f"Analysis complete ({used}) — cameras: {n_cam}, detections: {n_ind} (indep), trap-rate species: {n_tr}")
 
     # ---------- Export ----------
     def export_results_clicked(self) -> None:
@@ -510,6 +610,7 @@ class CameraTrapApp(QWidget):
         if out_path is None:
             self.log_err("Export failed (see console).")
             return
+
         self.log_save(f"Saved: {out_path} (chart in 'CameraTrapRates')")
         self.results_dirty = False
         self.last_export_path = out_path

@@ -2,6 +2,43 @@ import pandas as pd
 import math
 from datetime import datetime, timedelta
 import re
+from typing import Optional
+
+# ----------  Utility functions for analysis ----------
+
+EXCLUDED_SPECIES = {s.lower() for s in ("Other animal", "Not classified", "Empty")}
+
+def _species_series(df: pd.DataFrame, species_col: str) -> pd.Series:
+    """Species series: stripped strings, excluding blanks & excluded categories (case-insensitive)."""
+    s = (
+        df.get(species_col, pd.Series([], dtype="object"))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+    # IMPORTANT: comparison is lowercase, values returned are original case
+    return s[(s != "") & (~s.str.lower().isin(EXCLUDED_SPECIES))]
+
+def choose_species_column(df: pd.DataFrame) -> tuple[Optional[str], str]:
+    """
+    Decide whether to use Verified_class or Burst_class.
+    Returns (colname, status):
+       status = "verified" | "fallback-empty" | "fallback-missing"
+    """
+    if "Verified_class" in df.columns:
+        s = df["Verified_class"].dropna().astype(str).str.strip()
+        if s.ne("").any():
+            return "Verified_class", "verified"
+        else:
+            # exists but empty → fallback, warn
+            return "Burst_class", "fallback-empty"
+
+    # No Verified_class column
+    if "Burst_class" in df.columns:
+        return "Burst_class", "fallback-missing"
+
+    # Neither exists
+    return None, "missing-both"
 
 # ---------- Date parsing utilities ----------
 
@@ -128,12 +165,10 @@ def camera_extraction_report(df: pd.DataFrame) -> dict:
 
     rep["has_filename"] = df["Filename"].notna().sum()
 
-    # Lowercased species set for misread detection
-    species_set = set(
-        pd.Series(df.get("Burst_class", []))
-          .dropna().astype(str).str.strip().str.lower()
-          .unique()
-    )
+    col, _status = choose_species_column(df)
+    species_set = set()
+    if col:
+        species_set = set(_species_series(df, col).str.lower().unique())
 
     examples_none, examples_sp = [], []
     for _, raw in df["Filename"].dropna().items():
@@ -175,12 +210,10 @@ def normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     ensure_datetime_inplace(df, "Date_taken")
 
-    # Species set for detecting species-as-camera misreads
-    species_set = set(
-        pd.Series(df.get("Burst_class", []))
-          .dropna().astype(str).str.strip().str.lower()
-          .unique()
-    )
+    col, _status = choose_species_column(df)
+    species_set = set()
+    if col:
+        species_set = set(_species_series(df, col).str.lower().unique())
 
     camera = pd.Series("", index=df.index, dtype="object")
     source = pd.Series("none", index=df.index, dtype="object")
@@ -252,15 +285,24 @@ def get_bins(start_date: datetime, end_date: datetime, step: int = 7) -> list[da
     return bins
 
 # tiny debugger to verify the offending bin
-def debug_bin(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime) -> pd.DataFrame:
+def debug_bin(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime, 
+              species_col: str | None = None) -> pd.DataFrame:
     """Inspect rows that fall into a specific [start, end) bin for a camera/species."""
     sub = normalize_raw(df)
+    if species_col is None:
+        species_col, _ = choose_species_column(sub)
+    if not species_col:
+        raise ValueError("No species column found (Verified_class/Burst_class).")
+    
     hit = sub[(sub["Camera"] == cam) &
-              (sub["Burst_class"] == sp) &
+              (sub[species_col] == sp) &
               (sub["Date_taken"].between(start, end, inclusive="left"))]
-    return hit.sort_values("Date_taken")[["Camera", "Burst_class", "Date_taken"] + ([ "Label"] if "Label" in sub.columns else [])]
+    cols = ["Camera", species_col, "Date_taken"]
+    if "Label" in sub.columns: cols.append("Label")
+    return hit.sort_values("Date_taken")[cols]
 
-def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime) -> bool:
+def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: datetime,
+                  species_col: str | None = None) -> bool:
     """Check if there are detections for a specific camera and species within a date range.
     Args:
         df (DataFrame): DataFrame containing detection data
@@ -271,7 +313,11 @@ def has_detection(df: pd.DataFrame, cam: str, sp: str, start: datetime, end: dat
     Returns:
         bool: True if there are detections, False otherwise
     """
-    sub = df[(df["Camera"] == cam) & (df["Burst_class"] == sp)]
+    if species_col is None:
+        species_col, _ = choose_species_column(df)
+    if not species_col:
+        return False
+    sub = df[(df["Camera"] == cam) & (df[species_col] == sp)]
     return sub["Date_taken"].between(start, end, inclusive="left").any()
 
 # ---------- 1) Camera date summary ----------
@@ -307,7 +353,7 @@ def summarise_camera_dates(df: pd.DataFrame) -> pd.DataFrame:
 
 # ---------- 2) Independent detections ----------
 
-def identify_independent_detections(df: pd.DataFrame) -> pd.DataFrame:
+def identify_independent_detections(df: pd.DataFrame, species_col: str | None = None) -> pd.DataFrame:
     """
     Identify independent detections (>=30 min apart) per (Camera, Burst_class),
     while preserving original column order and adding 'Camera' as the first column.
@@ -316,11 +362,16 @@ def identify_independent_detections(df: pd.DataFrame) -> pd.DataFrame:
     # 1) Normalize to ensure Camera + valid datetimes
     x = normalize_raw(df)
 
+    if species_col is None:
+        species_col, _ = choose_species_column(x)
+    if not species_col:
+        raise ValueError("No species column found (Verified_class/Burst_class).")
+    
     # 2) Sort within groups to compute time gaps
-    x = x.sort_values(["Camera", "Burst_class", "Date_taken"], kind="stable")
+    x = x.sort_values(["Camera", species_col, "Date_taken"], kind="stable")
 
     # 3) Keep first event per (Camera, Species), then keep rows with gap >= 30 minutes
-    gap = x.groupby(["Camera", "Burst_class"], sort=False)["Date_taken"].diff()
+    gap = x.groupby(["Camera", species_col], sort=False)["Date_taken"].diff()
     keep = gap.isna() | (gap >= pd.Timedelta(minutes=30))
     out = x.loc[keep].copy()
 
@@ -362,6 +413,10 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
 
     # 2) Counts per species
     det = detections_df.copy()
+    det = det[det[species_col].notna()]
+    det[species_col] = det[species_col].astype(str).str.strip()
+    det = det[(det[species_col] != "") & (~det[species_col].str.lower().isin(EXCLUDED_SPECIES))]
+
     if count_col not in det.columns:
         det[count_col] = 1
     det[count_col] = (
@@ -425,7 +480,8 @@ def calculate_trap_rates(summary_df: pd.DataFrame,
 # ---------- 4) Detection histories ----------
 
 def create_detection_histories(df: pd.DataFrame, species_list: list,
-                               bin_size: int, sheet_name: str | None = None
+                               bin_size: int, sheet_name: str | None = None,
+                               species_col: str | None = None
                                ) -> dict[str, pd.DataFrame]:
     """Create detection histories for specified species with a given bin size.
     Args:
@@ -439,6 +495,11 @@ def create_detection_histories(df: pd.DataFrame, species_list: list,
     #raw0 = pd.read_excel(file_path, sheet_name=(sheet_name or "Sheet1"))
     raw = normalize_raw(df)
 
+    if species_col is None:
+        species_col, _ = choose_species_column(raw)
+    if not species_col:
+        raise ValueError("No species column found (Verified_class/Burst_class).")
+    
     # active windows
     summary = summarise_camera_dates(df).copy()
     for col in ("FirstPhoto", "LastPhoto"):
@@ -454,7 +515,10 @@ def create_detection_histories(df: pd.DataFrame, species_list: list,
 
     # camera order = first-seen order in data (so it matches user expectations)
     cams_in_order = sorted(pd.unique(raw["Camera"]), key=_camera_num)
-    species_to_use = species_list or sorted(raw["Burst_class"].dropna().unique())
+
+    series = raw[species_col].fillna("").astype(str).str.strip()
+    series = series[(series != "") & (~series.str.lower().isin(EXCLUDED_SPECIES))]
+    species_to_use = species_list or sorted(series.unique())
 
     all_hist: dict[str, pd.DataFrame] = {}
     for sp in species_to_use:
@@ -468,7 +532,7 @@ def create_detection_histories(df: pd.DataFrame, species_list: list,
                 if (first is None) or (b1 < first) or (b0 > last):
                     row.append("NA")
                 else:
-                    row.append(1 if has_detection(raw, cam, sp, b0, b1) else 0)
+                    row.append(1 if has_detection(raw, cam, sp, b0, b1, species_col=species_col) else 0)
             rows.append(row)
         all_hist[sp] = pd.DataFrame(rows, columns=headers)
     return all_hist
